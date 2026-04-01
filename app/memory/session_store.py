@@ -1,0 +1,1 @@
+# Lưu trữ memory (có thể dùng Redis hoặc in-memory)
