@@ -66,3 +66,5 @@ gcp-credentials.json
 # Models
 model/
 *.json
+
+data/
