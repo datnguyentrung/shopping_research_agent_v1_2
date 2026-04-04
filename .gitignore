@@ -64,7 +64,7 @@ secrets/
 gcp-credentials.json
 
 # Models
-model/
+models/
 *.json
 
 data/
