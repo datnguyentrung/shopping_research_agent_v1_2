@@ -4,8 +4,7 @@ import joblib
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MODEL_PATH = os.path.join(BASE_DIR, "model\query_category_classifier_v1\query_category_classifier")
+MODEL_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\models\query_category_classifier_v2\query_category_classifier'
 
 print("⏳ Đang thức tỉnh AI Classifier, đợi chút...")
 
@@ -20,7 +19,7 @@ except Exception as e:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
-model.eval()  # Đặt model vào chế độ đánh giá (inference mode)
+model.eval()  # Đặt models vào chế độ đánh giá (inference mode)
 
 label_encoder_path = os.path.join(MODEL_PATH, "label_encoder.joblib")
 try:
@@ -34,7 +33,7 @@ except FileNotFoundError:
 def classify_keyword(text):
     """Hàm nhận text và trả về danh mục dự đoán cùng độ tự tin"""
 
-    # Bước A: Tiền xử lý văn bản (Mã hóa text thành số để model hiểu)
+    # Bước A: Tiền xử lý văn bản (Mã hóa text thành số để models hiểu)
     inputs = tokenizer(
         text,
         return_tensors="pt",  # Trả về Pytorch Tensors
@@ -64,7 +63,7 @@ def classify_keyword(text):
         final_category_id = label_encoder.inverse_transform([pred_internal_id])[0]
         final_name = model.config.id2label.get(pred_internal_id, "Unknown")
     else:
-        # Cách fallback dự phòng nếu model có lưu id2label trong file config.json
+        # Cách fallback dự phòng nếu models có lưu id2label trong file config.json
         final_category_id = model.config.id2label.get(pred_internal_id, pred_internal_id)
         final_name = model.config.id2label.get(pred_internal_id, "Unknown")
 

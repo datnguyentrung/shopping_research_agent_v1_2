@@ -7,7 +7,7 @@ from tavily import TavilyClient
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = PROJECT_ROOT / ".env"
 
-# Always load env from project root, independent from current working directory.
+# Always load env from project root, independent of current working directory.
 load_dotenv(dotenv_path=ENV_FILE, override=False)
 
 tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))

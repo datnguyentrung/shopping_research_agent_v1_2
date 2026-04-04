@@ -10,7 +10,7 @@ from .base import BaseRepository
 
 
 class AttributeRepository(BaseRepository[Attribute]):
-    """Repository for Attribute model."""
+    """Repository for Attribute models."""
 
     def __init__(self, db: Session):
         super().__init__(db, Attribute)

@@ -9,7 +9,7 @@ from .base import BaseRepository
 
 
 class CategoryAttributeRepository(BaseRepository[CategoryAttribute]):
-    """Repository for CategoryAttribute model (join table)."""
+    """Repository for CategoryAttribute models (join table)."""
 
     def __init__(self, db: Session):
         super().__init__(db, CategoryAttribute)

@@ -40,10 +40,10 @@ def save_missing_categories(category_path, data_path, output_path):
     # 2. Gắn số lượng vào category_df gốc (để bắt được cả bọn có 1-49 mẫu)
     category_df['query_count'] = category_df['id'].map(query_counts).fillna(0).astype(int)
 
-    # 3. Lọc: Lấy những thằng có count < 50 (bao gồm cả bọn 0 mẫu)
+    # 3. Lọc: Lấy những thằng có count < 300 (bao gồm cả bọn 0 mẫu)
     # Đồng thời bỏ qua Level 1, 2 vì bạn không cần bổ sung cho nhãn cha
     missing_df = category_df[
-        (category_df['query_count'] < 50) &
+        (category_df['query_count'] < 300) &
         (~category_df['level'].isin([1, 2]))
     ].copy()
 
@@ -64,4 +64,5 @@ def save_missing_categories(category_path, data_path, output_path):
         print(missing_df[['id', 'name']].head(5))
 
 if __name__ == "__main__":
-    print_count_per_category(TRAINING_DATA_PATH)
+    # save_missing_categories(CATEGORY_PATH, CLEANNED_TRAINING_DATA_PATH, CATEGORY_MISSING_PATH)
+    print_count_per_category(CLEANNED_TRAINING_DATA_PATH)

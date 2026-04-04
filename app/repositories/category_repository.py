@@ -10,7 +10,7 @@ from .base import BaseRepository
 
 
 class CategoryRepository(BaseRepository[Category]):
-    """Repository for Category model."""
+    """Repository for Category models."""
 
     def __init__(self, db: Session):
         super().__init__(db, Category)

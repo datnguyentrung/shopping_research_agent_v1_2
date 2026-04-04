@@ -1,4 +1,4 @@
-# Class base chứa cấu hình chung (model, temperature...)
+# Class base chứa cấu hình chung (models, temperature...)
 from google.adk.agents import LlmAgent
 
 from app.utils.load_instruction_from_file import load_instruction_from_file
