@@ -28,6 +28,34 @@ def print_count_per_category(file_path):
         print(f"Lỗi: Không tìm thấy cột 'category_name'.")
 
 
+def print_count_per_category_having_depth(file_path):
+    df = pd.read_csv(file_path)
+
+    # Kiểm tra xem file có đủ 2 cột cần thiết không
+    if 'category_name' in df.columns and 'depth' in df.columns:
+        # Nhóm theo tên và depth, đếm số lượng, sau đó đổi tên cột đếm thành 'count'
+        category_counts = df.groupby(['category_name', 'depth']).size().reset_index(name='count')
+
+        # Sắp xếp theo số lượng đếm được giảm dần
+        category_counts = category_counts.sort_values(by='count', ascending=False).reset_index(drop=True)
+
+        # Thiết lập in không giới hạn số dòng
+        pd.set_option('display.max_rows', None)
+
+        print("=" * 50)
+        print("THỐNG KÊ CHI TIẾT THEO NHÃN VÀ DEPTH:")
+        # to_string(index=False) giúp in ra dạng bảng căn lề cực đẹp và bỏ cột index thừa (0, 1, 2...)
+        print(category_counts.to_string(index=False))
+        print("=" * 50)
+
+        print(f"Tổng cộng có {len(category_counts)} nhãn đã có dữ liệu.")
+
+        # Reset lại cấu hình sau khi in
+        pd.reset_option('display.max_rows')
+    else:
+        print(f"Lỗi: File thiếu cột 'category_name' hoặc 'depth'. Vui lòng kiểm tra lại data.")
+
+
 def save_missing_categories(category_path, data_path, output_path):
     print("--- Đang bắt đầu đối soát dữ liệu... ---")
 
@@ -65,4 +93,4 @@ def save_missing_categories(category_path, data_path, output_path):
 
 if __name__ == "__main__":
     # save_missing_categories(CATEGORY_PATH, CLEANNED_TRAINING_DATA_PATH, CATEGORY_MISSING_PATH)
-    print_count_per_category(CLEANNED_TRAINING_DATA_PATH)
+    print_count_per_category_having_depth(CLEANNED_TRAINING_DATA_PATH)

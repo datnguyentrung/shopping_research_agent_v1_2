@@ -2,29 +2,25 @@
 train_model.py
 ==============
 Fine-tune RoBERTa-base từ đầu cho bài toán phân loại danh mục sản phẩm.
-Dùng với data mới từ Amazon metadata (product title → category).
-
-Cải tiến so với v1:
-  1. Train từ roberta-base sạch (không dùng lại v1 đã nhiễm review text)
-  2. Stratified split đảm bảo phân phối nhãn đồng đều
-  3. Dynamic class weights — chỉ bật nếu imbalance ratio > ngưỡng
-  4. Early Stopping + load_best_model_at_end
-  5. LR warmup (linear) + cosine decay
-  6. Gradient Accumulation giả lập batch lớn
-  7. Metrics: accuracy + F1-macro + F1-weighted + per-class F1 log
-  8. Lưu metadata training để track experiment
 """
 
 import os
+
+# 1. Ép hệ thống chỉ dùng GPU số 0
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# 2. Tắt Weights & Biases
+os.environ["WANDB_DISABLED"] = "true"
+# 3. Tắt cảnh báo Tokenizer đa luồng
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# --- BÂY GIỜ MỚI IMPORT CÁC THƯ VIỆN KHÁC ---
 import json
 import joblib
-
+import gc
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import (
-    accuracy_score, f1_score, classification_report
-)
+from sklearn.metrics import accuracy_score, f1_score, classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_class_weight
@@ -40,17 +36,10 @@ from transformers import (
 # ─────────────────────────────────────────────
 # CẤU HÌNH
 # ─────────────────────────────────────────────
-# MODEL_DIR      = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\models\query_category_classifier_v2'
+CSV_PATH = '/kaggle/input/datasets/datnguyentrung/dataset/cleaned_training_data.csv'
+BASE_DIR = '/kaggle/working/Shopping_Research_Agent'
 
-# CSV_PATH       = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\cleaned_training_data.csv'
-# OUTPUT_MODEL   = os.path.join(MODEL_DIR, 'query_category_classifier')
-# RESULTS_DIR    = os.path.join(MODEL_DIR, 'training_results')
-# LOG_DIR        = os.path.join(MODEL_DIR, 'logs')
-
-BASE_DIR = '/content/drive/MyDrive/Shopping_Research_Agent'
-
-CSV_PATH     = os.path.join(BASE_DIR, 'data/cleaned_training_data.csv')
-MODEL_DIR    = os.path.join(BASE_DIR, 'models/query_category_classifier_v2')
+MODEL_DIR    = os.path.join(BASE_DIR, 'models/query_category_classifier_v3')
 OUTPUT_MODEL = os.path.join(MODEL_DIR, 'query_category_classifier')
 RESULTS_DIR  = os.path.join(MODEL_DIR, 'training_results')
 LOG_DIR      = os.path.join(MODEL_DIR, 'logs')
@@ -59,35 +48,39 @@ os.makedirs(OUTPUT_MODEL, exist_ok=True)
 os.makedirs(RESULTS_DIR,  exist_ok=True)
 os.makedirs(LOG_DIR,      exist_ok=True)
 
-# Model — luôn dùng roberta-base (train sạch từ đầu)
 PRETRAINED_MODEL = "roberta-base"
-
-# Hyperparams
-PER_DEVICE_BATCH = 16     # roberta-base + 8GB VRAM
-GRAD_ACCUM_STEPS = 2      # effective batch = 32
-MAX_EPOCHS       = 10
-LEARNING_RATE    = 3e-5   # standard cho fine-tune từ pretrained
-WARMUP_RATIO     = 0.06   # ~6% đầu linear warmup
-MAX_LENGTH       = 128     # title ngắn, 64 đủ — nhanh hơn 128 đáng kể
-
-# Class weights — tự động bật nếu imbalance ratio > ngưỡng
-AUTO_CLASS_WEIGHT_THRESHOLD = 10.0   # ratio > 10x thì bật
-
-# Early stopping
+PER_DEVICE_BATCH = 32
+GRAD_ACCUM_STEPS = 2
+MAX_EPOCHS       = 3
+LEARNING_RATE    = 3e-5
+WARMUP_RATIO     = 0.06
+MAX_LENGTH       = 128
+AUTO_CLASS_WEIGHT_THRESHOLD = 10.0
 EARLY_STOP_PATIENCE = 3
 
 
 # ─────────────────────────────────────────────
-# PYTORCH DATASET (ĐƯA RA MODULE LEVEL ĐỂ PICKLE ĐƯỢC TRÊN WINDOWS)
+# PYTORCH DATASET (LAZY TOKENIZATION - ĐÃ SỬA CHUẨN)
 # ─────────────────────────────────────────────
 class ShoppingDataset(torch.utils.data.Dataset):
-    def __init__(self, encodings, labels):
-        self.encodings = encodings
-        self.labels    = labels
+    def __init__(self, texts, labels, tokenizer, max_length):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
 
     def __getitem__(self, idx):
-        item = {k: torch.tensor(v[idx]) for k, v in self.encodings.items()}
-        item["labels"] = torch.tensor(self.labels[idx])
+        # Chỉ tokenize 1 dòng đang được gọi tới -> Không bao giờ tốn RAM
+        encoding = self.tokenizer(
+            self.texts[idx],
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_length,
+            return_tensors="pt"
+        )
+        # Squeeze để bỏ chiều batch vô ích
+        item = {k: v.squeeze(0) for k, v in encoding.items()}
+        item["labels"] = torch.tensor(self.labels[idx], dtype=torch.long)
         return item
 
     def __len__(self):
@@ -95,11 +88,6 @@ class ShoppingDataset(torch.utils.data.Dataset):
 
 
 def main():
-    """Main training entrypoint.
-
-    Đóng toàn bộ logic train/eval trong hàm main để tránh lỗi
-    multiprocessing trên Windows (yêu cầu bảo vệ if __name__ == "__main__").
-    """
     # ─────────────────────────────────────────────
     # 1. LOAD DATA
     # ─────────────────────────────────────────────
@@ -112,7 +100,6 @@ def main():
     df = df[["search_query", "category_id", "category_name"]].dropna()
     print(f"   Tổng mẫu: {len(df):,} | Số nhãn: {df['category_id'].nunique()}")
 
-    # Kiểm tra imbalance
     counts = df["category_id"].value_counts()
     imbalance_ratio = counts.max() / counts.min()
     print(f"   Imbalance ratio: {imbalance_ratio:.1f}x")
@@ -127,7 +114,6 @@ def main():
     df["label"] = label_encoder.fit_transform(df["category_id"])
     num_labels = len(label_encoder.classes_)
 
-    # Map id2label / label2id (dùng category_name thay vì ID thô)
     cat_name_map = (
         df.drop_duplicates("category_id")
           .set_index("category_id")["category_name"]
@@ -153,32 +139,21 @@ def main():
     )
     print(f"\n   Train: {len(X_train):,} | Val: {len(X_val):,} | Test: {len(X_test):,}")
 
+    # Dọn dẹp RAM rác rưởi của DataFrame trước khi nạp model
+    del df, X_temp, y_temp
+    gc.collect()
+
     # ─────────────────────────────────────────────
-    # 4. TOKENIZATION
+    # 4. TOKENIZATION & DATASET INIT (LAZY LOADING)
     # ─────────────────────────────────────────────
     print(f"\n🔤 Tải tokenizer: {PRETRAINED_MODEL}")
     tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL)
 
-    def tokenize(texts_list):
-        return tokenizer(
-            texts_list,
-            truncation=True,
-            padding=True,
-            max_length=MAX_LENGTH,
-        )
-
-    print("   Tokenizing train...")
-    train_encodings = tokenize(X_train)
-    print("   Tokenizing val...")
-    val_encodings   = tokenize(X_val)
-    print("   Tokenizing test...")
-    test_encodings  = tokenize(X_test)
-    print("   ✓ Hoàn tất tokenization")
-
-    # Sử dụng ShoppingDataset ở module level (picklable)
-    train_dataset = ShoppingDataset(train_encodings, y_train)
-    val_dataset   = ShoppingDataset(val_encodings,   y_val)
-    test_dataset  = ShoppingDataset(test_encodings,  y_test)
+    print("   Khởi tạo Dataset (Lazy Loading - Tối ưu RAM)...")
+    train_dataset = ShoppingDataset(X_train, y_train, tokenizer, MAX_LENGTH)
+    val_dataset   = ShoppingDataset(X_val,   y_val,   tokenizer, MAX_LENGTH)
+    test_dataset  = ShoppingDataset(X_test,  y_test,  tokenizer, MAX_LENGTH)
+    print("   ✓ Hoàn tất!")
 
     # ─────────────────────────────────────────────
     # 6. MODEL
@@ -202,8 +177,6 @@ def main():
         class_weights = compute_class_weight(
             "balanced", classes=np.unique(y_train), y=y_train
         )
-        # Clip weight cực cao để tránh gradient bùng nổ
-        # Với imbalance 500x → weight 329 → clip xuống 10
         MAX_WEIGHT = 10.0
         class_weights = np.clip(class_weights, 0, MAX_WEIGHT)
         weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
@@ -240,29 +213,25 @@ def main():
     # ─────────────────────────────────────────────
     training_args = TrainingArguments(
         output_dir=RESULTS_DIR,
-
         num_train_epochs              = MAX_EPOCHS,
         per_device_train_batch_size   = PER_DEVICE_BATCH,
-        per_device_eval_batch_size    = PER_DEVICE_BATCH * 2,  # eval không cần gradient, batch lớn hơn được
+        per_device_eval_batch_size    = PER_DEVICE_BATCH * 2,
         gradient_accumulation_steps   = GRAD_ACCUM_STEPS,
-
         learning_rate                 = LEARNING_RATE,
         warmup_ratio                  = WARMUP_RATIO,
         lr_scheduler_type             = "cosine",
         weight_decay                  = 0.01,
-
         eval_strategy                 = "epoch",
         save_strategy                 = "epoch",
         load_best_model_at_end        = True,
         metric_for_best_model         = "f1_macro",
         greater_is_better             = True,
-        save_total_limit              = 2,          # chỉ giữ 2 checkpoint gần nhất
-
-        logging_steps                 = 1000,
+        save_total_limit              = 2,
+        logging_steps                 = 100,   # Sửa từ 500 xuống 100 để 1-2 phút là thấy log nổ ra 1 lần
+        disable_tqdm                  = True,  # THÊM DÒNG NÀY VÀO: Tắt triệt để thanh tiến trình gây treo log ngầm
         report_to                     = "none",
-
         fp16                          = torch.cuda.is_available(),
-        dataloader_num_workers        = 0,          # quan trọng trên Windows: tránh multiprocessing DataLoader
+        dataloader_num_workers        = 0,
         dataloader_pin_memory         = torch.cuda.is_available(),
     )
 
@@ -283,16 +252,6 @@ def main():
     print(f"\n{'='*55}")
     print(f"  BẮT ĐẦU TRAINING")
     print(f"{'='*55}")
-    print(f"  Model              : {PRETRAINED_MODEL}")
-    print(f"  Số nhãn            : {num_labels}")
-    print(f"  Effective batch    : {PER_DEVICE_BATCH * GRAD_ACCUM_STEPS}")
-    print(f"  Max epochs         : {MAX_EPOCHS} (early stop patience={EARLY_STOP_PATIENCE})")
-    print(f"  Learning rate      : {LEARNING_RATE} (warmup {WARMUP_RATIO*100:.0f}% + cosine)")
-    print(f"  Max seq length     : {MAX_LENGTH}")
-    print(f"  Class weights      : {'ON (clipped ≤10)' if use_class_weights else 'OFF'}")
-    print(f"  Device             : {device}")
-    print(f"{'='*55}\n")
-
     trainer.train()
 
     # ─────────────────────────────────────────────
@@ -308,7 +267,6 @@ def main():
     print(f"  F1-macro    : {f1_mac:.4f}")
     print(f"  F1-weighted : {f1_w:.4f}")
 
-    # Per-class F1 report (lưu vào file)
     print("\n📝 Tạo per-class classification report...")
     preds_output = trainer.predict(test_dataset)
     preds = np.argmax(preds_output.predictions, axis=-1)
@@ -320,7 +278,6 @@ def main():
     report_path = os.path.join(OUTPUT_MODEL, "classification_report.txt")
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report)
-    print(f"   Lưu tại: {report_path}")
 
     # ─────────────────────────────────────────────
     # 13. LƯU MODEL
@@ -331,7 +288,7 @@ def main():
     joblib.dump(label_encoder, os.path.join(OUTPUT_MODEL, "label_encoder.joblib"))
 
     metadata = {
-        "version":           "v2",
+        "version":           "v3",
         "pretrained_model":  PRETRAINED_MODEL,
         "num_labels":        num_labels,
         "max_length":        MAX_LENGTH,
@@ -350,12 +307,8 @@ def main():
 
     print(f"\n{'='*55}")
     print(f"  HOÀN TẤT!")
-    print(f"  Model lưu tại: {OUTPUT_MODEL}")
-    print(f"  Test F1-macro : {f1_mac:.4f}")
     print(f"{'='*55}")
 
 
 if __name__ == '__main__':
-    # Bắt buộc trên Windows để multiprocessing (dataloader workers, etc.)
-    # hoạt động đúng, tránh RuntimeError và lỗi pickle của lớp dataset cục bộ.
     main()

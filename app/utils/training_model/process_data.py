@@ -9,27 +9,29 @@ Các bước:
   2. Clean text (bỏ HTML, ký tự lạ, normalize)
   3. Lọc query không hợp lệ (quá ngắn, toàn số, không phải tiếng Anh...)
   4. Dedup (query + category_id)
-  5. Cân bằng: cap MAX, đảm bảo MIN bằng cách cảnh báo rõ
-  6. Báo cáo chi tiết + phân phối nhãn
-  7. Lưu cleaned_training_data.csv
+  5. Cắt bỏ nhãn thiếu dữ liệu (Loại bỏ các category < MIN)
+  6. Cân bằng: cap MAX
+  7. Cảnh báo nhãn mỏng
+  8. Lưu cleaned_training_data.csv
+  9. Báo cáo chi tiết + phân phối nhãn
 """
-
+import os
 import pandas as pd
 import re
-import os
+import glob
 import unicodedata
-from collections import Counter
 
 # ─────────────────────────────────────────────
 # CẤU HÌNH
 # ─────────────────────────────────────────────
-INPUT_PATH  = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\training_data.csv'
+INPUT_PATH  = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\parquet_chunks'
 OUTPUT_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\cleaned_training_data.csv'
 
-MAX_SAMPLES_PER_CATEGORY = 10_000   # Cap trên mỗi nhãn
-MIN_SAMPLES_WARNING      = 300      # Cảnh báo nếu nhãn < ngưỡng này sau clean
-MIN_QUERY_WORDS          = 3        # Tối thiểu 3 từ
-MAX_QUERY_WORDS          = 50       # Quá dài → cắt bớt thay vì bỏ
+MAX_SAMPLES_PER_CATEGORY = 10_000   # Cap tối đa trên mỗi nhãn
+MIN_SAMPLES_PER_CATEGORY = 500      # 🗑️ MỚI: XÓA HOÀN TOÀN nhãn nếu số lượng < ngưỡng này
+MIN_SAMPLES_WARNING      = 1000     # Cảnh báo nếu nhãn < ngưỡng này (dành cho các nhãn đã qua ải MIN ở trên)
+MIN_QUERY_WORDS          = 1        # Tối thiểu 1 từ
+MAX_QUERY_WORDS          = 100      # Quá dài → cắt bớt thay vì bỏ
 MIN_ALPHA_RATIO          = 0.5      # Tỷ lệ ký tự chữ tối thiểu
 
 # ─────────────────────────────────────────────
@@ -96,18 +98,38 @@ def process_data(input_path: str, output_path: str):
     print("=" * 55)
 
     # ── 1. Load ──
-    print(f"\n📂 Tải: {input_path}")
-    df = pd.read_csv(input_path, dtype={'category_id': str})
+    print(f"\n📂 Tải dữ liệu từ thư mục: {input_path}")
+
+    # Tìm tất cả file .parquet trong thư mục
+    parquet_files = glob.glob(os.path.join(input_path, "*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"❌ Không tìm thấy file .parquet nào trong: {input_path}")
+
+    print(f"   Tìm thấy {len(parquet_files)} file. Đang gộp dữ liệu...")
+
+    # Đọc và gộp tất cả các file
+    df_list = [pd.read_parquet(f) for f in parquet_files]
+    df = pd.concat(df_list, ignore_index=True)
+
+    # Ép kiểu category_id về string để tránh lỗi mapping sau này
+    df['category_id'] = df['category_id'].astype(str)
+
     initial_count = len(df)
     print(f"   Tổng dòng ban đầu: {initial_count:,}")
 
-    required_cols = {'search_query', 'category_id', 'category_name'}
+    required_cols = {
+        'search_query', 'category_id', 'category_name',
+        #'depth' # TODO: Bỏ 'depth' nếu không cần nữa
+    }
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         raise ValueError(f"❌ File thiếu cột: {missing_cols}")
 
     # ── 2. Bỏ dòng null ──
-    df = df.dropna(subset=['search_query', 'category_id', 'category_name'])
+    df = df.dropna(subset=[
+        'search_query', 'category_id', 'category_name',
+        #'depth' # TODO: Bỏ 'depth' nếu không cần nữa
+    ])
     after_null = len(df)
     print(f"   Sau bỏ null: {after_null:,} (bỏ {initial_count - after_null:,})")
 
@@ -133,10 +155,24 @@ def process_data(input_path: str, output_path: str):
     after_dedup = len(df)
     print(f"   Sau dedup: {after_dedup:,} (bỏ {after_filter - after_dedup:,})")
 
-    # ── 6. Cap & cân bằng ──
+    # ── 6. Cắt bỏ nhãn thiếu dữ liệu (DROP MIN) ──
+    print(f"\n✂️  Loại bỏ các nhãn có < {MIN_SAMPLES_PER_CATEGORY} mẫu...")
+    cat_counts_before_drop = df['category_id'].value_counts()
+
+    # Lấy danh sách các category_id ĐẠT yêu cầu
+    valid_categories = cat_counts_before_drop[cat_counts_before_drop >= MIN_SAMPLES_PER_CATEGORY].index
+    num_dropped_cats = len(cat_counts_before_drop) - len(valid_categories)
+
+    # Lọc lại df
+    df = df[df['category_id'].isin(valid_categories)]
+    after_drop_min = len(df)
+
+    print(f"   Đã xóa hoàn toàn {num_dropped_cats} nhãn quá ít data.")
+    print(f"   Số dòng sau cắt: {after_drop_min:,} (bỏ {after_dedup - after_drop_min:,})")
+
+    # ── 7. Cap & cân bằng (MAX) ──
     print(f"\n⚖️  Cân bằng dữ liệu (max {MAX_SAMPLES_PER_CATEGORY:,}/nhãn)...")
     sampled_list = []
-    cat_counts_before = df.groupby('category_id').size()
 
     for cat_id, group in df.groupby('category_id'):
         if len(group) > MAX_SAMPLES_PER_CATEGORY:
@@ -153,23 +189,26 @@ def process_data(input_path: str, output_path: str):
     after_balance = len(df_final)
     print(f"   Sau cân bằng: {after_balance:,}")
 
-    # ── 7. Kiểm tra nhãn thiếu dữ liệu ──
+    # ── 8. Kiểm tra nhãn mỏng dữ liệu ──
     cat_counts_after = df_final.groupby('category_id').size()
     low_cats = cat_counts_after[cat_counts_after < MIN_SAMPLES_WARNING]
 
     if len(low_cats) > 0:
-        print(f"\n⚠️  {len(low_cats)} nhãn có < {MIN_SAMPLES_WARNING} mẫu (cần bổ sung):")
+        print(f"\n⚠️  {len(low_cats)} nhãn có < {MIN_SAMPLES_WARNING} mẫu (hơi mỏng, lưu ý):")
         for cid, cnt in low_cats.sort_values().items():
             cat_name = df_final[df_final['category_id'] == cid]['category_name'].iloc[0]
             print(f"   {cnt:>6,}  [{cid}] {cat_name}")
     else:
-        print(f"\n✅ Tất cả nhãn đều có ≥ {MIN_SAMPLES_WARNING} mẫu!")
+        print(f"\n✅ Tất cả các nhãn còn lại đều có ≥ {MIN_SAMPLES_WARNING} mẫu!")
 
-    # ── 8. Lưu ──
-    df_final = df_final[['category_id', 'category_name', 'search_query']]
+    # ── 9. Lưu ──
+    df_final = df_final[[
+        'category_id', 'category_name', 'search_query',
+        #'depth'  # TODO: Bỏ 'depth' nếu không cần nữa
+    ]]
     df_final.to_csv(output_path, index=False, encoding='utf-8-sig')
 
-    # ── 9. Báo cáo tổng kết ──
+    # ── 10. Báo cáo tổng kết ──
     print(f"\n{'='*55}")
     print(f"  BÁO CÁO CUỐI")
     print(f"{'='*55}")
@@ -177,8 +216,9 @@ def process_data(input_path: str, output_path: str):
     print(f"  Sau bỏ null           : {after_null:>10,}")
     print(f"  Sau filter            : {after_filter:>10,}")
     print(f"  Sau dedup             : {after_dedup:>10,}")
+    print(f"  Sau cắt (<{MIN_SAMPLES_PER_CATEGORY:<4})     : {after_drop_min:>10,}")
     print(f"  Sau cân bằng (final)  : {after_balance:>10,}")
-    print(f"  Số nhãn               : {df_final['category_id'].nunique():>10,}")
+    print(f"  Số nhãn chốt          : {df_final['category_id'].nunique():>10,}")
     print(f"  File lưu tại          : {output_path}")
     print(f"{'='*55}")
 
