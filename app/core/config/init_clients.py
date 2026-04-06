@@ -47,8 +47,3 @@ def ensure_api_key_configured() -> str:
             "Missing Gemini API key. Set GOOGLE_API_KEY (or GEMINI_API_KEY) in .env or your shell."
         )
     return api_key
-
-
-PROJECT_ID = os.getenv("PROJECT_ID", "default_project_id")
-ENGINE_ID = os.getenv("ENGINE_ID") or os.getenv("VEXTER_ENGINE_ID", "default_engine_id")
-GOOGLE_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")

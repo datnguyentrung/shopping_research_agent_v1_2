@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     VEXTER_ENGINE_ID: str = ""
     PROJECT_ID: str = ""
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
-    CLAUDE_API_KEY: str = ""
+    ZAI_API_KEY: str = ""
+    SERPER_API_KEY: str = ""
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 

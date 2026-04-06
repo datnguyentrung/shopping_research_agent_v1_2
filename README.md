@@ -1,5 +1,5 @@
 # Shopping_Research_Agent_V1_2
-
+# $env:KAGGLE_API_TOKEN="KGAT_b340d0eab726bd76dd0ab265dcd4f847"
 ## Cấu trúc thư mục
 
 ```text

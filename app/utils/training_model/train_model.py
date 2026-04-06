@@ -202,7 +202,7 @@ def main():
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             labels_local  = inputs.pop("labels")
             outputs = model(**inputs)
-            loss_fn = CrossEntropyLoss(weight=weights_tensor)
+            loss_fn = CrossEntropyLoss(weight=weights_tensor, label_smoothing=0.1)
             loss    = loss_fn(outputs.logits, labels_local)
             return (loss, outputs) if return_outputs else loss
 
@@ -221,6 +221,7 @@ def main():
         warmup_ratio                  = WARMUP_RATIO,
         lr_scheduler_type             = "cosine",
         weight_decay                  = 0.01,
+        label_smoothing_factor        = 0.1,
         eval_strategy                 = "epoch",
         save_strategy                 = "epoch",
         load_best_model_at_end        = True,

@@ -63,8 +63,8 @@ class FlowOrchestratorRuntime:
             ):
                 print(f"[Runtime] Event received: {type(event).__name__}, is_final={event.is_final_response()}")
 
-                if not event.is_final_response():
-                    continue
+                # if not event.is_final_response():
+                #     continue
 
                 text = self._extract_text(event)
                 print(f"[Runtime] Extracted text: {repr(text[:80]) if text else 'EMPTY'}")

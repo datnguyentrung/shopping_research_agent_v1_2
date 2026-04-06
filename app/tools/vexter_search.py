@@ -1,7 +1,8 @@
 from fastapi import HTTPException
 from google.cloud import discoveryengine
 
-from app.core.config.init_clients import PROJECT_ID, ENGINE_ID, bootstrap_api_env
+from app.core.config.config import settings
+from app.core.config.init_clients import bootstrap_api_env
 from app.schemas.requests import SearchRequest
 import asyncio
 
@@ -11,9 +12,9 @@ async def perform_search(request: SearchRequest):
         bootstrap_api_env()
         client = discoveryengine.SearchServiceClient()
         serving_config = client.serving_config_path(
-            project=PROJECT_ID,
+            project=settings.PROJECT_ID,
             location="global",
-            data_store=ENGINE_ID,
+            data_store=settings.VEXTER_ENGINE_ID,
             serving_config="default_search",
         )
 

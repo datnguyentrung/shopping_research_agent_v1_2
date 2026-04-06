@@ -1,12 +1,10 @@
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException
-from google.cloud import discoveryengine
+from fastapi import APIRouter
 from sse_starlette import EventSourceResponse
 
 from app.core.adk_client import stream_chat_chunks
-from app.schemas.entities import DoneChunk, ErrorChunk
-from app.schemas.requests import ChatRequest, SearchRequest
+from app.schemas.requests import ChatRequest
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 

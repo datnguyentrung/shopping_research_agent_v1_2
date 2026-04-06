@@ -1,14 +1,27 @@
 import os
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from google.cloud import discoveryengine
 
 from app.api.routes import router as chat_router
-from app.core.config import ensure_api_key_configured
-from app.schemas.requests import SearchRequest
+from app.tools.query_category_classifier import init_classifier_model
+from app.tools.transalte import init_qwen_model
 
-app = FastAPI(title="Shopping Research Agent API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Starting up Shopping Research Agent API...")
+
+    init_classifier_model()
+    init_qwen_model()
+    print("✅ All models initialized successfully! API is ready to serve requests.")
+
+    yield
+    print("🛑 Shutting down Shopping Research Agent API...")
+
+# Khởi tạo FastAPI với lifespan
+app = FastAPI(title="Shopping Research Agent API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,7 +32,6 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
-
 
 @app.get("/")
 async def root():
