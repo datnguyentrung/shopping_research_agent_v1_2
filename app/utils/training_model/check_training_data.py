@@ -4,7 +4,7 @@ CLEANNED_TRAINING_DATA_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\
 TRAINING_DATA_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\training_data.csv'
 CATEGORY_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\category.csv'
 CATEGORY_MISSING_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\category_missing.csv'
-
+CURRENT_CATEGORY_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\category_current.csv'
 
 def print_count_per_category(file_path):
     df = pd.read_csv(file_path)
@@ -91,6 +91,47 @@ def save_missing_categories(category_path, data_path, output_path):
         print("\nTop 5 nhãn thiếu đầu tiên:")
         print(missing_df[['id', 'name']].head(5))
 
+def save_current_categories(category_path, data_path, output_path):
+    print("--- Đang xử lý và lọc danh sách nhãn... ---")
+
+    # 1. Đọc file category và rename cột ngay từ đầu cho chuẩn format output
+    category_df = pd.read_csv(category_path)
+    category_df = category_df.rename(columns={
+        'Category ID': 'id',
+        'Name': 'name',
+        'Parent ID': 'parent_id',
+        'Depth': 'depth'
+    })
+    # Đảm bảo ID là chuỗi để map chính xác
+    category_df['id'] = category_df['id'].astype(str)
+
+    # 2. Đọc file cleaned_data
+    data_df = pd.read_csv(data_path, dtype={'category_id': str})
+
+    # 3. Tính toán số lượng mẫu cho mỗi category_id từ cleaned_data
+    query_counts = data_df['category_id'].value_counts()
+
+    # 4. Gắn số lượng vào dataframe nhãn
+    category_df['query_count'] = category_df['id'].map(query_counts).fillna(0).astype(int)
+
+    # 5. Lọc: Chỉ lấy những nhãn có >= 500 mẫu dữ liệu
+    current_df = category_df[category_df['query_count'] >= 500].copy()
+
+    # 6. Sắp xếp theo thứ tự ưu tiên (nhiều mẫu lên trước)
+    current_df = current_df.sort_values(by='query_count', ascending=False)
+
+    # 7. Chỉ lấy các cột mục tiêu và ghi ra file
+    final_columns = ['id', 'name', 'parent_id', 'depth']
+    current_df[final_columns].to_csv(output_path, index=False, encoding='utf-8-sig')
+
+    print("=" * 40)
+    print(f"✅ Đã lưu thành công vào: {output_path}")
+    print(f"📊 Tìm thấy {len(current_df)} nhãn thỏa mãn điều kiện (count >= 500).")
+    print("Preview data:")
+    print(current_df[final_columns].head())
+    print("=" * 40)
+
 if __name__ == "__main__":
     # save_missing_categories(CATEGORY_PATH, CLEANNED_TRAINING_DATA_PATH, CATEGORY_MISSING_PATH)
-    print_count_per_category_having_depth(CLEANNED_TRAINING_DATA_PATH)
+    # print_count_per_category_having_depth(CLEANNED_TRAINING_DATA_PATH)
+    save_current_categories(CATEGORY_PATH,CLEANNED_TRAINING_DATA_PATH, CURRENT_CATEGORY_PATH)

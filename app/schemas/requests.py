@@ -10,6 +10,7 @@ class HiddenEventRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = ""
+    sessionId: str | None = None  # Session ID để maintain state giữa các request
     hidden_events: HiddenEventRequest | None = None
 
     @model_validator(mode="after")

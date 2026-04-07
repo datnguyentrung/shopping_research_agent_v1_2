@@ -5,7 +5,7 @@ class CategoryAttribute(Base):
     __tablename__ = "category_attribute"
 
     id = Column(Integer, primary_key=True, index=True)
-    category_id = Column(Integer, ForeignKey("category.id"), nullable=False)
+    category_id = Column(String(255), ForeignKey("category.id"), nullable=False)
     attribute_id = Column(Integer, ForeignKey("attribute.id"), nullable=False)
     is_core = Column(Boolean, nullable=False, default=False)
 

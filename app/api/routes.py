@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from sse_starlette import EventSourceResponse
 
 from app.core.adk_client import stream_chat_chunks
+from app.core.chunk_builders import stream_shopping_agent
 from app.schemas.requests import ChatRequest
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -39,8 +40,21 @@ async def _event_generator(payload: ChatRequest) -> AsyncIterator[dict[str, str]
 
 @router.post("/stream")
 async def stream_chat(payload: ChatRequest) -> EventSourceResponse:
+    async def _event_generator():
+        try:
+            async for chunk in stream_shopping_agent(payload):
+                if hasattr(chunk, "model_dump_json"):
+                    yield {"data": chunk.model_dump_json(exclude_none=True)}
+            yield {"data": "[DONE]"}
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            from app.schemas.entities import ErrorChunk
+            yield {"data": ErrorChunk(error=str(exc)).model_dump_json()}
+            yield {"data": "[DONE]"}
+
     return EventSourceResponse(
-        _event_generator(payload),
+        _event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -48,6 +62,5 @@ async def stream_chat(payload: ChatRequest) -> EventSourceResponse:
             "X-Accel-Buffering": "no",
         },
     )
-
 
 # Các endpoint (vd: /run_sse, /chat)

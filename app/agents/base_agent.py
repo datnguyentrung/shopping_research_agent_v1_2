@@ -4,7 +4,6 @@ import os
 from google.adk.agents import LlmAgent
 
 from app.core.config.config import settings
-from app.tools.query_category_classifier import classify_keyword
 from app.utils.load_instruction_from_file import load_instruction_from_file
 
 # Override môi trường cục bộ để LiteLLM trỏ luồng API sang Z.AI

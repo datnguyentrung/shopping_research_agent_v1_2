@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Set, Optional
+from sqlalchemy import select
+from sqlalchemy.orm import aliased
 
 from sqlalchemy.orm import Session
 
 from app.models.category_attribute import CategoryAttribute
 from .base import BaseRepository
+from ..models import Category, Attribute
 
 
 class CategoryAttributeRepository(BaseRepository[CategoryAttribute]):
@@ -37,4 +40,37 @@ class CategoryAttributeRepository(BaseRepository[CategoryAttribute]):
             )
             .first()
         )
+
+    def get_inherited_attributes_cte(self, category_ids: List[str]) -> List[type[Attribute]]:
+        """
+        Lấy toàn bộ model Attribute của một list categories và các category cha.
+        """
+        if not category_ids:
+            return []
+
+        # 1. Base Query: Lấy các category ban đầu
+        base_q = (
+            select(Category.id, Category.parent_id)
+            .where(Category.id.in_(category_ids))
+            .cte(name="category_hierarchy", recursive=True)
+        )
+
+        # 2. Recursive Part: Alias model Category để tự join lên cha
+        parent_alias = aliased(Category)
+        hierarchy_q = base_q.union_all(
+            select(parent_alias.id, parent_alias.parent_id)
+            .where(parent_alias.id == base_q.c.parent_id)
+        )
+
+        # 3. Query cuối: Join CTE với CategoryAttribute, sau đó JOIN tiếp với Attribute
+        final_q = (
+            select(Attribute)
+            .join(CategoryAttribute, Attribute.id == CategoryAttribute.attribute_id)
+            .join(hierarchy_q, CategoryAttribute.category_id == hierarchy_q.c.id)
+            .distinct() # Lọc trùng nếu nhiều category cùng chia sẻ 1 attribute
+        )
+
+        # Trả về list các object Attribute
+        result = self.db.execute(final_q).scalars().all()
+        return list(result)
 

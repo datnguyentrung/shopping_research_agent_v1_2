@@ -1,34 +1,99 @@
+import re
+from typing import List
+
 import requests
 import json
 from app.core.config.config import settings
+from app.schemas.entities import ShopInfo, CapturedData
 
-# 1. Dùng endpoint /search
-url = "https://google.serper.dev/search"
 
-# 2. Payload với từ khóa giao dịch trực tiếp
-payload = {
-  "q": "Áo len nam",
-  "gl": "vn",
-  "hl": "vi"
-}
+def map_serper_to_captured_data(serper_data: dict) -> list[CapturedData]:
+  """
+  Map dữ liệu JSON từ Google Serper Shopping sang List[CapturedData]
+  """
+  results = []
+  shopping_items = serper_data.get("shopping", [])
 
-headers = {
-  'X-API-KEY': settings.SERPER_API_KEY,
-  'Content-Type': 'application/json'
-}
+  for item in shopping_items:
+    # 1. Trích xuất thông tin Cửa hàng / Nền tảng
+    source_name = item.get("source", "Unknown_Shop")
+    product_link = item.get("link", "")
 
-print("Đang gọi API Serper...")
-response = requests.post(url, headers=headers, json=payload)
-data = response.json()
+    shop_info = ShopInfo(
+      shop_id=source_name.lower().replace(".vn", "").replace(".com", ""),  # Tạo ID giả dựa trên tên
+      shop_name=source_name,
+      shop_url=product_link
+    )
 
-print("✅ API Serper đã trả về kết quả. Dữ liệu nhận được:")
-print(json.dumps(data, ensure_ascii=False, indent=2))
+    # 2. Tạo object CapturedData
+    captured_item = CapturedData(
+      platform="google_shopping",
+      product_id=item.get("productId", str(item.get("position", 0))),  # Fallback về position nếu mất ID
+      name=item.get("title", "No Name"),
+      price_current=clean_vnd_price(item.get("price", "")),
+      price_original=None,  # Serper thường không có giá gốc
+      main_image=item.get("imageUrl", ""),
+      rating_star=item.get("rating", 0.0),  # Lấy rating nếu Serper có trả về (đôi khi có)
+      rating_count=item.get("ratingCount", 0),
+      sold_count=None,
+      shop=shop_info,
+      tier_variations=[]
+    )
 
-# 3. Đường dẫn file JSON của bạn
-file_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\serper_ouput.json'
+    results.append(captured_item)
 
-# 4. Lưu response vào file JSON
-with open(file_path, 'w', encoding='utf-8') as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
+  return results
 
-print(f"✅ Đã lưu kết quả thành công vào: {file_path}")
+def clean_vnd_price(price_str: str) -> float:
+  """
+  Hàm làm sạch chuỗi giá tiền.
+  VD: "275.000 ₫" -> 275000.0
+  """
+  if not price_str:
+    return 0.0
+  # Dùng regex loại bỏ tất cả các ký tự không phải là số (xóa cả dấu chấm, phẩy, ký hiệu tiền)
+  cleaned = re.sub(r'[^\d]', '', price_str)
+  return float(cleaned) if cleaned else 0.0
+
+
+
+def serper_search(keyword: str) -> List[CapturedData]:
+  # 1. Dùng endpoint /search
+  url = "https://google.serper.dev/shopping"
+
+  # 2. Payload với từ khóa giao dịch trực tiếp
+  payload = {
+    "q": keyword,
+    "gl": "vn",
+    "hl": "vi"
+  }
+
+  headers = {
+    'X-API-KEY': settings.SERPER_API_KEY,
+    'Content-Type': 'application/json'
+  }
+
+  print("Đang gọi API Serper...")
+  response = requests.post(url, headers=headers, json=payload)
+  data = response.json()
+
+  print("✅ API Serper đã trả về kết quả. Dữ liệu nhận được:")
+  # print(json.dumps(data, ensure_ascii=False, indent=2))
+  # Thực hiện Mapping
+  captured_list = map_serper_to_captured_data(data)
+
+  return captured_list
+
+# # 3. Đường dẫn file JSON của bạn
+# file_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\serper_ouput.json'
+#
+# # 4. Lưu response vào file JSON
+# with open(file_path, 'w', encoding='utf-8') as f:
+#     json.dump(data, f, ensure_ascii=False, indent=2)
+#
+# print(f"✅ Đã lưu kết quả thành công vào: {file_path}")
+
+if __name__ == "__main__":
+    # Test hàm serper_search với một từ khóa mẫu
+    test_keyword = "Áo thun nam đẹp"
+    serper_search(test_keyword)

@@ -6,7 +6,7 @@ from app.core.database import Base
 class Category(Base):
     __tablename__ = "category"
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    id = Column(String(255), primary_key=True, index=True, autoincrement=True)
     name = Column(String(255), unique=True, nullable=False)
     parent_id = Column(Integer, ForeignKey("category.id"))
     level = Column(Integer, nullable=False)

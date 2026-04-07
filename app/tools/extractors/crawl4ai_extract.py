@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, LLMExtractionStrategy, LLMConfig
 
 from app.core.config import ensure_api_key_configured
+from app.core.config.config import settings
 from app.schemas.entities import CapturedData
 from app.tools.extractors.base import BaseExtractor
 
@@ -87,7 +88,7 @@ async def extract_by_llm(target_url: str, is_spa: bool):
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
             provider="gemini/gemini-3.1-flash-lite-preview",
-            api_token=ensure_api_key_configured()
+            api_token=settings.GOOGLE_API_KEY
         ),
         schema=CapturedData.model_json_schema(),
         instruction="Hãy trích xuất thông tin sản phẩm (tên, giá, link, ảnh...) từ nội dung trang web thương mại điện tử Shopee sau. Bỏ qua các sản phẩm rác."
