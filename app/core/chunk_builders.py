@@ -1,10 +1,12 @@
 import asyncio
+import traceback
 import uuid
-from typing import Dict, Any
+import json
 
-from app.memory.session_store import get_or_create_session
+from app.core.orchestrator_runtime import get_flow_runtime
+from app.memory.session_store import get_or_create_session, clear_session
 from app.repositories.category_attribute_repository import CategoryAttributeRepository
-from app.schemas.entities import A2UIChunk, ChatStreamChunk, MessageChunk
+from app.schemas.entities import A2UIChunk, ChatStreamChunk, MessageChunk, CapturedData
 from app.schemas.requests import ChatRequest
 from app.services.search_service import run_parallel_searches
 from app.tools.query_category_classifier import classify_keyword_topk
@@ -43,14 +45,14 @@ async def stream_shopping_agent(payload: ChatRequest):
                 attributes = category_repo.get_inherited_attributes_cte(category_ids)
 
                 # Convert SQLAlchemy objects to dicts for serialization
-                attributes_data = []
-                for attr in attributes:
-                    attributes_data.append({
+                attributes_data = [
+                    {
                         'id': attr.id,
                         'name': attr.name,
                         'options': attr.options if attr.options else []
-                    })
-
+                    }
+                    for attr in attributes[:5]  # Lấy tối đa 5 phần tử
+                ]
                 session["attributes"] = attributes_data
                 session["phase"] = "QUESTIONNAIRE"
             finally:
@@ -131,28 +133,49 @@ async def stream_shopping_agent(payload: ChatRequest):
             if action == "PRODUCT_FEEDBACK":
                 # data là payload: { product_id: "...", feedback: "LIKE"/"DISLIKE", reasons: ["..."] }
                 if isinstance(data, dict):
-                    if data.get("feedback") == "LIKE":
+                    decision = data.get("decision", "").lower()
+                    if decision == "like":
                         session["whitelist"].append(data)
-                    else:
+                    elif decision == "dislike":
                         session["blacklist"].append(data)
 
+                total_swipes = len(session.get("whitelist", [])) + len(session.get("blacklist", []))
+
                 # KIỂM TRA ĐIỀU KIỆN DỪNG
-                # Dừng nếu đã thích >= 5 sản phẩm hoặc giỏ chờ < 1 sản phẩm
-                if len(session["whitelist"]) >= 5 or len(session["pending_products"]) < 1:
+                # Điều kiện dừng:
+                # 1. Đã "Phù hợp" đủ 5 cái
+                # 2. HOẶC tổng số lần quẹt (thích + không thích) đạt tối đa 10 cái
+                # 3. HOẶC đã cạn kho sản phẩm
+                if len(session["whitelist"]) >= 5 or total_swipes >= 10 or len(session["pending_products"]) < 1:
+
+                    # Góc độ Edge Case: Nếu user quẹt 10 cái mà chê cả 10 (whitelist rỗng)
+                    if not session["whitelist"]:
+                        yield MessageChunk(
+                            content="Có vẻ bạn chưa ưng ý sản phẩm nào trong lô này. Hãy thử ấn Bắt đầu mới và mô tả lại nhu cầu cụ thể hơn (ví dụ: đổi tầm giá, màu sắc) nhé!")
+                        yield A2UIChunk(a2ui={"type": "a2ui_done", "data": {}})
+                        clear_session(session_id)
+                        return
+
                     session["phase"] = "FINAL_SUMMARY"
                     yield A2UIChunk(a2ui={"type": "a2ui_processing_status",
-                                          "data": {"statusText": "Đang viết báo cáo tóm tắt...", "progressPercent": 100}})
+                                          "data": {"statusText": "Đang tổng hợp các mẫu bạn thích để viết báo cáo...",
+                                                   "progressPercent": 100}})
 
                     # Gọi LLM để sinh kết quả cuối cùng
-                    final_chunks = await generate_final_summary_with_llm(session["whitelist"], session.get("raw_products", []))
-                    for chunk in final_chunks:
+                    final_chunks = generate_final_summary_with_llm(session["whitelist"],
+                                                                   session.get("raw_products", []))
+                    async for chunk in final_chunks:
                         yield chunk
 
+                    # Đánh dấu hoàn tất UI
                     yield A2UIChunk(a2ui={"type": "a2ui_done", "data": {}})
-                    session["phase"] = "DONE"
+
+                    # DỌN RÁC RAM SAU KHI XONG VIỆC
+                    clear_session(session_id)
+                    return
 
                 else:
-                    # Push thẻ quẹt tiếp theo
+                    # Chưa đủ điều kiện -> Push thẻ quẹt tiếp theo
                     next_prod = session["pending_products"].pop(0)
                     yield _build_interactive_product_chunk(next_prod)
 
@@ -163,34 +186,40 @@ async def stream_shopping_agent(payload: ChatRequest):
         yield MessageChunk(content=f"Có lỗi xảy ra: {str(e)}")
         session["phase"] = "ERROR"
 
-# --- CÁC HÀM HELPER ĐỂ BUILD UI CHUNK ---
-
+# ---------------------------------------------------------
+# ------------- CÁC HÀM HELPER ĐỂ BUILD UI CHUNK ----------
+# ---------------------------------------------------------
 def _build_questionnaire_chunk(attr: dict) -> A2UIChunk:
     return A2UIChunk(
         a2ui={
             "type": "a2ui_questionnaire",
             "data": {
-                "title": f"Bạn ưu tiên {attr['name'].lower()} như thế nào?",
-                "allowMultiple": True,
+                "title": f"{attr['name']}",
+                "allowMultiple": True,  # Gõ thẳng camelCase vì đây là dict thủ công
                 "options": attr["options"],
-                "attribute_id": attr["id"]
+                "attributeId": attr["id"]  # camelCase
             }
         }
     )
 
 def _build_interactive_product_chunk(product_data: dict) -> A2UIChunk:
-    # Chuẩn hóa dữ liệu sản phẩm cho frontend
+    if isinstance(product_data, dict):
+        product_model = CapturedData(**product_data)
+    else:
+        product_model = product_data
+
     return A2UIChunk(
         a2ui={
             "type": "a2ui_interactive_product",
             "data": {
-                "product": product_data,
+                # 2. Ép Pydantic dump model này ra dict bằng camelCase
+                "product": product_model.model_dump(by_alias=True, exclude_none=True),
                 "reasonsToReject": [
-                    {"id": "price", "label": "Giá quá cao"},
-                    {"id": "style", "label": "Không hợp phong cách"},
-                    {"id": "brand", "label": "Thương hiệu"},
-                    {"id": "features", "label": "Tính năng"},
-                    {"id": "other", "label": "Khác"}
+                    "Giá quá cao",
+                    "Không hợp phong cách",
+                    "Thương hiệu",
+                    "Tính năng",
+                    "Khác"
                 ]
             }
         }
@@ -209,103 +238,93 @@ def apply_product_filters(products: list, answers: list) -> list:
     # Hiện tại trả về tối đa 50 sản phẩm
     return filtered[:50]
 
-async def generate_final_summary_with_llm(whitelist: list, all_products: list) -> list:
-    """
-    Gọi LLM để sinh text tóm tắt cuối cùng với 3 phần:
-    1. Summary
-    2. Product Listing (Name, link, price, pros, cons, target audience)
-    3. Comparison Table
-    """
-    from app.agents.base_agent import interactive_agent
-    import json
 
-    # Chuẩn bị dữ liệu sản phẩm đã chọn
+async def generate_final_summary_with_llm(whitelist: list, all_products: list, blacklist: list = None):
+    if blacklist is None:
+        blacklist = []
+
     selected_products = []
-    for item in whitelist:
-        product_data = item.get("product", {})
-        selected_products.append({
-            "name": product_data.get("name", "N/A"),
-            "price": product_data.get("price_current", "N/A"),
-            "currency": product_data.get("currency", "VND"),
-            "rating": product_data.get("rating_star", "N/A"),
-            "sold_count": product_data.get("sold_count", "N/A"),
-            "shop": product_data.get("shop", {}).get("shop_name", "N/A"),
-            "link": product_data.get("link", ""),
+    whitelist_ids = [str(item.get("productId") or item.get("product_id")) for item in whitelist]
+    blacklist_ids = [str(item.get("productId") or item.get("product_id")) for item in blacklist]
+    interacted_ids = set(whitelist_ids + blacklist_ids)
+
+    # 1. Trích xuất thông tin sản phẩm User đã thích (Sở thích/Gu)
+    for prod in all_products:
+        prod_dict = prod.model_dump(by_alias=False) if hasattr(prod, "model_dump") else prod
+        if str(prod_dict.get("product_id")) in whitelist_ids:
+            selected_products.append({
+                "Tên": prod_dict.get("name", "N/A"),
+                "Giá": f"{int(prod_dict.get('price_current', 0)):,} {prod_dict.get('currency', 'VND')}",
+                "Đánh giá": f"{prod_dict.get('rating_star', 0)} ⭐",
+                "Link": prod_dict.get("product_url", "")
+            })
+
+    # ========================================================
+    # GIAI ĐOẠN 1: PYTHON LỌC THÔ (RETRIEVAL) -> Tôn trọng Relevance
+    # ========================================================
+    candidates = []
+    for prod in all_products:
+        prod_dict = prod.model_dump(by_alias=False) if hasattr(prod, "model_dump") else prod
+        current_id = str(prod_dict.get("product_id"))
+
+        # Bỏ qua những cái đã quẹt (Whitelist/Blacklist)
+        if current_id not in interacted_ids:
+            # Chỉ lấy những sản phẩm có rating ổn (>= 4.0) hoặc hàng mới lên kệ (0 sao)
+            rating = float(prod_dict.get('rating_star', 0))
+            if rating == 0.0 or rating >= 4.0:
+                candidates.append(prod_dict)
+
+    rough_top_40 = candidates[:40]
+
+    # Chuẩn bị data siêu nhẹ cho AI đọc
+    ai_candidates = []
+    for c in rough_top_40:
+        ai_candidates.append({
+            "Tên": c.get("name", "N/A"),
+            "Giá": f"{int(c.get('price_current', 0)):,} VND",
+            "Đánh giá": f"{c.get('rating_star', 0)} ⭐ | Đã bán: {c.get('sold_count', 0)}",
+            "Shop": c.get("shop", {}).get("shop_name", "N/A"),
+            "Link": c.get("product_url", "")
         })
 
-    # Tạo prompt cho LLM
-    prompt = f"""Dựa trên các sản phẩm người dùng đã chọn below, hãy tạo ra một báo cáo tóm tắt với 3 phần:
+        # ========================================================
+        # GIAI ĐOẠN 2: GOOGLE ADK ĐÁNH GIÁ & CHỌN TOP 10 (RANKING)
+        # ========================================================
+        prompt = f"""Bạn là một Chuyên gia phân tích dữ liệu mua sắm.
+    Nhiệm vụ của bạn là phân tích "Sở thích của tôi" để hiểu Gu của tôi, sau đó quét qua "Danh sách 40 ứng viên" hệ thống vừa lọc ra, suy luận và chọn ra đúng TOP 10 SẢN PHẨM PHÙ HỢP NHẤT.
 
-## Dữ liệu sản phẩm đã chọn:
-{json.dumps(selected_products, ensure_ascii=False, indent=2)}
+    [Sở thích của tôi - Dựa trên các sản phẩm tôi đã chấm "Phù hợp"]:
+    {json.dumps(selected_products, ensure_ascii=False, indent=2)}
 
-## Yêu cầu:
-Hãy viết một báo cáo bao gồm:
+    [Danh sách 40 ứng viên thô]:
+    {json.dumps(ai_candidates, ensure_ascii=False, indent=2)}
 
-### 1. Tóm tắt
-Tóm tắt ngắn gọn về nhu cầu và những gì người dùng tìm được.
+    RÀNG BUỘC CỐT LÕI (TUYỆT ĐỐI TUÂN THỦ):
+    - BẮT BUỘC chỉ đề xuất các mặt hàng ĐÚNG CÙNG LOẠI với "Sở thích của tôi". Ví dụ: Nếu tôi chọn "Quần âu/Quần tây", bạn CHỈ ĐƯỢC gợi ý Quần âu/Quần tây. TUYỆT ĐỐI KHÔNG gợi ý Áo, Thắt lưng, Túi xách, Giày, Quần lót, hoặc các loại quần khác (như Jean/Jogger) trừ khi có sự tương đồng cực kỳ lớn.
 
-### 2. Danh sách sản phẩm chi tiết
-Với mỗi sản phẩm, bao gồm:
-- Tên sản phẩm
-- Link (nếu có)
-- Giá
-- Ưu điểm (2-3 điểm)
-- Nhược điểm (1-2 điểm, nếu có)
-- Đối tượng phù hợp nhất
-
-### 3. Bảng so sánh
-Bảng so sánh các sản phẩm theo các tiêu chí:
-- Tên
-- Giá
-- Đánh giá
-- Số lượng đã bán
-- Điểm nổi bật
-
-Hãy viết bằng tiếng Việt, ngắn gọn và súc tích."""
+    Yêu cầu xuất Báo cáo bằng Tiếng Việt gồm 4 phần:
+    ### 1. Phân tích chân dung nhu cầu
+    (Dựa vào sở thích của tôi, hãy tóm tắt tôi đang tìm kiếm phong cách gì, tầm giá bao nhiêu).
+    ### 2. Danh sách sản phẩm tôi đã chốt
+    (Liệt kê lại các sản phẩm tôi đã chọn kèm Link).
+    ### 3. Đề xuất TOP 10 tốt nhất cùng danh mục
+    (Liệt kê Top 10 sản phẩm TƯƠNG ĐỒNG NHẤT VỀ LOẠI HÀNG VÀ PHONG CÁCH từ 40 ứng viên. Nêu rõ lý do chọn kèm Link).
+    ### 4. Bảng tổng hợp so sánh
+    (Gộp chung danh sách đã chốt và Top 10 đề xuất vào 1 bảng Markdown duy nhất).
+    """
 
     try:
-        # Gọi LLM và stream kết quả
-        response_content = ""
-
-        # Sử dụng interactive_agent để tạo response
-        # Lưu ý: Cần check cách gọi agent API của bạn
-        # Đây là mock implementation - bạn cần điều chỉnh theo API thực tế
-
-        # Mock response for now
-        response_content = f"""### Tóm tắt
-Dựa trên lựa chọn của bạn, mình đã tìm thấy {len(selected_products)} sản phẩm phù hợp với nhu cầu.
-
-### Danh sách sản phẩm nổi bật
-
-"""
-        for idx, product in enumerate(selected_products, 1):
-            response_content += f"""#### {idx}. {product['name']}
-- **Giá:** {product['price']:,} {product['currency']}
-- **Đánh giá:** {product['rating']} ⭐ | Đã bán: {product.get('sold_count', 'N/A')}
-- **Ưu điểm:** Chất lượng tốt, giá cả hợp lý
-- **Nhược điểm:** Cần kiểm tra thêm thông tin
-- **Đối tượng phù hợp:** Người dùng phổ thông
-- **Link:** {product.get('link', 'N/A')}
-
-"""
-
-        response_content += """### Bảng so sánh chi tiết
-
-| Tên sản phẩm | Giá | Đánh giá | Đã bán | Điểm nổi bật |
-|--------------|-----|----------|--------|--------------|
-"""
-        for product in selected_products:
-            response_content += f"| {product['name']} | {product['price']:,} {product['currency']} | {product['rating']} ⭐ | {product.get('sold_count', 'N/A')} | Chất lượng tốt |\n"
-
-        # Return as chunks
-        yield MessageChunk(content=response_content)
+        runtime = get_flow_runtime()
+        async for text_chunk in runtime.stream_text(prompt):
+            if text_chunk:
+                yield MessageChunk(content=text_chunk)
 
     except Exception as e:
         print(f"Error generating final summary: {e}")
-        import traceback
         traceback.print_exc()
-        yield MessageChunk(content="Xin lỗi, có lỗi xảy ra khi tạo báo cáo tóm tắt.")
+        yield MessageChunk(
+            content="\n\n*Hệ thống đang quá tải, không thể tạo báo cáo tóm tắt lúc này. Bạn vui lòng xem lại danh sách ở trên nhé!*")
+
 
 # Legacy functions - kept for compatibility but deprecated
 def build_hidden_event_chunks(payload: ChatRequest) -> list[ChatStreamChunk]:

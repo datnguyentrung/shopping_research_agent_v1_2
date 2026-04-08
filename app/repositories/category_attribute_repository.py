@@ -5,10 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import aliased
 
 from sqlalchemy.orm import Session
+from sqlalchemy.testing import db
 
+from app.core.database import SessionLocal
 from app.models.category_attribute import CategoryAttribute
-from .base import BaseRepository
-from ..models import Category, Attribute
+from app.repositories.base import BaseRepository
+from app.models import Category, Attribute
 
 
 class CategoryAttributeRepository(BaseRepository[CategoryAttribute]):
@@ -73,4 +75,11 @@ class CategoryAttributeRepository(BaseRepository[CategoryAttribute]):
         # Trả về list các object Attribute
         result = self.db.execute(final_q).scalars().all()
         return list(result)
+
+if __name__ == "__main__":
+    db = SessionLocal()
+    cateogory_repo = CategoryAttributeRepository(db)
+    result = attributes = cateogory_repo.get_inherited_attributes_cte(['1045830', '2419343011'])
+    print("🚀 Kết quả Attribute kế thừa:")
+    print(result)
 

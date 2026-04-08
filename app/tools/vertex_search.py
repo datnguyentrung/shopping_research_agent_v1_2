@@ -49,18 +49,31 @@ async def perform_search(request: SearchRequest) -> List[CapturedData]:
 
         # Vì dùng AsyncClient, response trả về có thể cần lặp bất đồng bộ (async for)
         async for result in response:
-            # 1. Gỡ Protobuf thành Dictionary thông thường
+            # 1. Gỡ Protobuf thành Dictionary
             clean_product_dict = parse_protobuf_data(result.document.struct_data)
 
-            # 2. Map dict vào thẳng Pydantic Model (CapturedData)
-            # Dùng ** để unpack dict. Pydantic sẽ tự động bắt các field trùng tên
-            # và bỏ qua các field thừa (như _vertex_document_id, product_url)
+            # CỨU CÁNH CHO PRODUCT_ID:
+            # Nếu trong struct_data không có product_id, lấy ID của document đắp vào
+            if "product_id" not in clean_product_dict:
+                clean_product_dict["product_id"] = result.document.id
+
+            # Đảm bảo có object shop (dù rỗng) để đưa vào Pydantic
+            if "shop" not in clean_product_dict:
+                clean_product_dict["shop"] = {}
+            else:
+                if "shop_id" in clean_product_dict["shop"] and clean_product_dict["shop"]["shop_id"] is not None:
+                    shop_id_val = clean_product_dict["shop"]["shop_id"]
+                    if isinstance(shop_id_val, float):
+                        clean_product_dict["shop"]["shop_id"] = int(shop_id_val)
+                    clean_product_dict["shop"]["shop_id"] = str(shop_id_val)
+
+            # 2. Map dict vào thẳng Pydantic Model
             try:
                 captured_item = CapturedData(**clean_product_dict)
-                results_list.append(captured_item)
+                results_list.append(captured_item.model_dump())
             except Exception as validation_error:
-                # Catch lỗi nếu có 1 doc bị thiếu trường bắt buộc để không làm sập cả list
-                print(f"⚠️ Bỏ qua sản phẩm lỗi map data: {validation_error}")
+                # Lúc này nếu vẫn lỗi, nghĩa là thiếu những trường BẮT BUỘC khác
+                print(f"⚠️ Bỏ qua sản phẩm: {validation_error}")
                 continue
 
         return results_list

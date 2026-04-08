@@ -3,20 +3,27 @@
 import asyncio
 from typing import Any, Dict, List
 
-# Quản lý session đơn giản bằng Dictionary (Memory).
-# Nếu sau này có nhiều user thực tế, bạn có thể chuyển sang Redis.
-session_store: Dict[str, Dict[str, Any]] = {}
+from cachetools import TTLCache
 
-def get_or_create_session(session_id: str) -> Dict[str, Any]:
-    if session_id not in session_store:
-        session_store[session_id] = {
-            "phase": "INIT", # INIT -> QUESTIONNAIRE -> PRODUCT_SWIPE -> DONE
-            "search_task": None, # Chứa asyncio.Task của việc tìm kiếm ngầm
-            "attributes": [], # Danh sách câu hỏi lấy từ Database
-            "answers": {}, # Câu trả lời của user
-            "raw_products": [], # Sản phẩm cào được từ Serper + Vertex
-            "pending_products": [], # Sản phẩm chờ được quẹt
-            "whitelist": [], # Sản phẩm User Thích
-            "blacklist": [] # Sản phẩm User Bỏ qua
+# Quản lý session đơn giản bằng Dictionary (Memory).
+SESSION_STORE = TTLCache(maxsize=1000, ttl=3600)
+
+def get_or_create_session(session_id: str) -> dict:
+    if session_id not in SESSION_STORE:
+        # Khởi tạo state mặc định cho một user mới
+        SESSION_STORE[session_id] = {
+            "phase": "INIT",
+            "attributes": [],
+            "answers": [],
+            "raw_products": [],
+            "pending_products": [],
+            "whitelist": [],
+            "blacklist": [],
+            "search_task": None
         }
-    return session_store[session_id]
+    return SESSION_STORE[session_id]
+
+def clear_session(session_id: str):
+    """Gọi hàm này khi user hoàn tất luồng để dọn rác RAM ngay lập tức"""
+    if session_id in SESSION_STORE:
+        del SESSION_STORE[session_id]

@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import List
 
@@ -22,13 +23,14 @@ def map_serper_to_captured_data(serper_data: dict) -> list[CapturedData]:
     shop_info = ShopInfo(
       shop_id=source_name.lower().replace(".vn", "").replace(".com", ""),  # Tạo ID giả dựa trên tên
       shop_name=source_name,
-      shop_url=product_link
+      shop_location=item.get("shop_location")
     )
 
     # 2. Tạo object CapturedData
     captured_item = CapturedData(
       platform="google_shopping",
       product_id=item.get("productId", str(item.get("position", 0))),  # Fallback về position nếu mất ID
+      product_url=product_link,
       name=item.get("title", "No Name"),
       price_current=clean_vnd_price(item.get("price", "")),
       price_original=None,  # Serper thường không có giá gốc
@@ -57,7 +59,7 @@ def clean_vnd_price(price_str: str) -> float:
 
 
 
-def serper_search(keyword: str) -> List[CapturedData]:
+async def serper_search(keyword: str) -> List[CapturedData]:
   # 1. Dùng endpoint /search
   url = "https://google.serper.dev/shopping"
 
@@ -77,12 +79,12 @@ def serper_search(keyword: str) -> List[CapturedData]:
   response = requests.post(url, headers=headers, json=payload)
   data = response.json()
 
-  print("✅ API Serper đã trả về kết quả. Dữ liệu nhận được:")
-  # print(json.dumps(data, ensure_ascii=False, indent=2))
+  # print("data:", data)
+
   # Thực hiện Mapping
   captured_list = map_serper_to_captured_data(data)
 
-  return captured_list
+  return [item.model_dump() for item in captured_list]
 
 # # 3. Đường dẫn file JSON của bạn
 # file_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\serper_ouput.json'
@@ -96,4 +98,7 @@ def serper_search(keyword: str) -> List[CapturedData]:
 if __name__ == "__main__":
     # Test hàm serper_search với một từ khóa mẫu
     test_keyword = "Áo thun nam đẹp"
-    serper_search(test_keyword)
+    results = asyncio.run(serper_search(test_keyword))
+    print(f"Tổng sản phẩm thu được từ Serper: {len(results)}")
+    # In ra một vài sản phẩm đầu tiên để kiểm tra
+    print(json.dumps(results, indent=3, ensure_ascii=False))

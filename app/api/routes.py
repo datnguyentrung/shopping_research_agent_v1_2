@@ -17,7 +17,7 @@ async def _event_generator(payload: ChatRequest) -> AsyncIterator[dict[str, str]
         async for chunk in stream_chat_chunks(payload):
             # Kiểm tra: Nếu chunk là một Pydantic Model (có model_dump_json)
             if hasattr(chunk, "model_dump_json"):
-                yield {"data": chunk.model_dump_json(exclude_none=True)}
+                yield {"data": chunk.model_dump_json(exclude_none=True, by_alias=True)}
             # Nếu chunk lỡ là string (do flow_runtime trả về text thô)
             elif isinstance(chunk, str):
                 import json
@@ -44,7 +44,7 @@ async def stream_chat(payload: ChatRequest) -> EventSourceResponse:
         try:
             async for chunk in stream_shopping_agent(payload):
                 if hasattr(chunk, "model_dump_json"):
-                    yield {"data": chunk.model_dump_json(exclude_none=True)}
+                    yield {"data": chunk.model_dump_json(exclude_none=True, by_alias=True)}
             yield {"data": "[DONE]"}
         except Exception as exc:
             import traceback

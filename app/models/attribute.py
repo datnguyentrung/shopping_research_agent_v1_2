@@ -9,4 +9,4 @@ class Attribute(Base):
     options = Column(JSON, nullable=False)  # Lưu trữ các lựa chọn dưới dạng list
 
     def __repr__(self):
-        return f"<Attribute(id={self.id}, name='{self.name}', value='{self.value}')>"
+        return f"<Attribute(id={self.id}, name='{self.name}', options='{self.options}')>"
