@@ -291,6 +291,9 @@ async def generate_final_summary_with_llm(whitelist: list, all_products: list, b
         # ========================================================
         # GIAI ĐOẠN 2: GOOGLE ADK ĐÁNH GIÁ & CHỌN TOP 10 (RANKING)
         # ========================================================
+        prompt = f"""Hãy viết báo cáo phân tích mua sắm dựa trên dữ liệu sau:
+        [Sản phẩm người dùng đã chọn]: {json.dumps(selected_products, ensure_ascii=False)}
+        [10 Ứng viên tiềm năng nhất để gợi ý thêm]: {json.dumps(ai_candidates[:10], ensure_ascii=False)}
 
     [Danh sách 40 ứng viên thô]:
     {json.dumps(ai_candidates, ensure_ascii=False, indent=2)}
