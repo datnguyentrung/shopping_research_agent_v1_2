@@ -32,7 +32,7 @@ async def stream_shopping_agent(payload: ChatRequest):
             vi_keyword, en_keyword = translate_and_fix(user_message)
 
             # 2. Phân loại danh mục
-            categories = classify_keyword_topk(en_keyword, k=3)
+            categories = classify_keyword_topk(en_keyword, k=2)
             category_ids = [c["category_id"] for c in categories]
 
             # 3. KÍCH HOẠT TÌM KIẾM NGẦM
@@ -61,6 +61,7 @@ async def stream_shopping_agent(payload: ChatRequest):
             # 5. Đẩy câu hỏi đầu tiên xuống FE
             if session["attributes"]:
                 first_attr = session["attributes"].pop(0)
+                session["current_attribute_id"] = first_attr['id']  # THÊM DÒNG NÀY
                 yield _build_questionnaire_chunk(first_attr)
             else:
                 # Nếu không có câu hỏi nào, nhảy thẳng sang chờ lấy sản phẩm
@@ -84,7 +85,7 @@ async def stream_shopping_agent(payload: ChatRequest):
 
     try:
         if session["phase"] == "QUESTIONNAIRE":
-            if action in ["SUBMIT_SURVEY", "SKIP_QUESTION"]:
+            if action in ["SUBMIT_SURVEY", "SKIP_SURVEY"]:
                 # Lưu câu trả lời nếu có
                 if action == "SUBMIT_SURVEY":
                     # data lúc này là list các option ID được chọn
@@ -231,12 +232,12 @@ def apply_product_filters(products: list, answers: list) -> list:
     Đây là logic lọc cơ bản - bạn có thể nâng cấp sau.
     """
     if not answers:
-        return products[:50]  # Giới hạn 50 sản phẩm nếu không có filter
+        return products[:10]  # Giới hạn 50 sản phẩm nếu không có filter
 
     filtered = products
     # Ở đây bạn có thể implement logic lọc phức tạp hơn
     # Hiện tại trả về tối đa 50 sản phẩm
-    return filtered[:50]
+    return filtered[:10]
 
 
 async def generate_final_summary_with_llm(whitelist: list, all_products: list, blacklist: list = None):
@@ -290,11 +291,6 @@ async def generate_final_summary_with_llm(whitelist: list, all_products: list, b
         # ========================================================
         # GIAI ĐOẠN 2: GOOGLE ADK ĐÁNH GIÁ & CHỌN TOP 10 (RANKING)
         # ========================================================
-        prompt = f"""Bạn là một Chuyên gia phân tích dữ liệu mua sắm.
-    Nhiệm vụ của bạn là phân tích "Sở thích của tôi" để hiểu Gu của tôi, sau đó quét qua "Danh sách 40 ứng viên" hệ thống vừa lọc ra, suy luận và chọn ra đúng TOP 10 SẢN PHẨM PHÙ HỢP NHẤT.
-
-    [Sở thích của tôi - Dựa trên các sản phẩm tôi đã chấm "Phù hợp"]:
-    {json.dumps(selected_products, ensure_ascii=False, indent=2)}
 
     [Danh sách 40 ứng viên thô]:
     {json.dumps(ai_candidates, ensure_ascii=False, indent=2)}
