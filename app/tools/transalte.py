@@ -168,16 +168,7 @@ def translate_and_fix(text: str) -> tuple[str, str]:
     prompt = PROMPT_TEMPLATE.replace("{input}", text_clean)
 
     # 2. Gọi Model
-    output = llm(
-        prompt,
-        max_tokens=64,
-        temperature=0.0,
-        repeat_penalty=1.0,
-        stop=["<|im_end|>", "\n\n", "Input:"],
-        echo=False,
-    )
-
-    raw: str = output["choices"][0]["text"]
+    raw: str = _call_llm(prompt)
     vi_keyword, en_keyword = _parse_output(raw)
 
     # 3. Hậu xử lý & Fallback chặt chẽ hơn
