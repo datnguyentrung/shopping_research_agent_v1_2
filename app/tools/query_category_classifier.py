@@ -42,7 +42,7 @@ def init_classifier_model():
     print(f"✅ Tải thành công Classifier! Đang chạy trên: {device}")
 
 
-def classify_keyword_topk(text, k=5):
+def classify_keyword_topk(text, k=3):
     """Hàm nhận text và trả về Top K danh mục dự đoán cùng độ tự tin"""
     # Đảm bảo model đã được load
     if model is None or tokenizer is None:
@@ -111,7 +111,7 @@ if __name__ == "__main__":
             continue
 
         # Gọi hàm dự đoán
-        top_results = classify_keyword_topk(user_input, k=5)
+        top_results = classify_keyword_topk(user_input, k=2)
 
         print(f"🎯 Kết quả dự đoán:")
         for rank, res in enumerate(top_results, 1):
