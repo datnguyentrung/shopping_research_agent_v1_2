@@ -16,6 +16,18 @@ You MUST attempt to decode even the messiest Telex before giving up.
 - "khoacs gioos" -> ALWAYS "Windbreaker".
 - "quan loots" -> ALWAYS "Underwear" (NOT Shorts).
 - "coor loj" -> ALWAYS "Turtleneck".
+- "quan au" / "quần âu" -> ALWAYS "Dress pants" or "Formal trousers" (NOT Jeans).
+- "ao so mi" / "sow mi" -> ALWAYS "Button-down shirt" or "Dress shirt".
+- "quan tay" -> ALWAYS "Dress trousers".
+- "ao thun" / "phoong" -> ALWAYS "T-shirt".
+- "ao khoac" -> ALWAYS "Jacket" or "Outerwear".
+- "giay tay" / "giày tây" -> ALWAYS "Oxford shoes" or "Formal shoes".
+- "dep" -> ALWAYS "Sandals" or "Slippers" depending on context.
+
+## CRITICAL DISTINCTION
+- "Jeans" = quần bò, denim → only use when input explicitly contains "bò", "denim", "jean"
+- "Dress pants / Formal trousers" = quần âu, quần tây → formal office/suit pants
+- NEVER translate "quần âu" as "jeans". They are completely different products.
 
 # STEP-BY-STEP PROCESS
 1. **If input is already English**: Translate to standard Vietnamese | Keep or refine the English (e.g., "Women's Sandals" -> "Giày dép nữ | Women's sandals"). Treat special characters like "&" smoothly as "and".
