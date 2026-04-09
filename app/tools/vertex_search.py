@@ -40,7 +40,7 @@ async def perform_search(request: SearchRequest) -> List[CapturedData]:
             serving_config=serving_config,
             query=search_keyword,
             filter=search_filter if search_filter else None,
-            page_size=1000,  # Thử tăng lên 1000
+            page_size=50,  # Thử tăng lên 1000
         )
 
         response = await client.search(search_req)
@@ -49,6 +49,10 @@ async def perform_search(request: SearchRequest) -> List[CapturedData]:
 
         # Vì dùng AsyncClient, response trả về có thể cần lặp bất đồng bộ (async for)
         async for result in response:
+            # 2. Kiểm tra nếu đã đủ 50 sản phẩm hợp lệ thì dừng lại ngay
+            if len(results_list) >= 50:
+                break
+
             # 1. Gỡ Protobuf thành Dictionary
             clean_product_dict = parse_protobuf_data(result.document.struct_data)
 
@@ -83,6 +87,6 @@ async def perform_search(request: SearchRequest) -> List[CapturedData]:
 
 if __name__ == "__main__":
     # Thay category_filter thành None hoặc bỏ hẳn đi
-    test_request = SearchRequest(keyword="ao khoac bomber nam chinh hang", category_filter=None)
+    test_request = SearchRequest(keyword="áo sơ mi trắng", category_filter=None)
     search_results = asyncio.run(perform_search(test_request))
     print(json.dumps(search_results, indent=2, ensure_ascii=False))
