@@ -66,7 +66,7 @@ def show_tree():
     df = pd.read_csv(CATEGORY_PATH)
 
     # Lọc dữ liệu: Chỉ lấy đến độ sâu 3
-    df = df[df['Depth'] <= 6]
+    df = df[df['Depth'] <= 5]
 
     G = nx.DiGraph()
 

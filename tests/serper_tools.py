@@ -1,7 +1,7 @@
 import json
 
 # 1. Đọc dữ liệu từ file JSON
-file_path = r'/data/vertex_product.jsonl'
+file_path = r'/data/vertex_data.jsonl'
 
 try:
     with open(file_path, 'r', encoding='utf-8') as file:
