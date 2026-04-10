@@ -1,12 +1,14 @@
 import asyncio
+import json
 import logging
+import random
 import urllib
 
 from patchright.sync_api import sync_playwright
 
 logger = logging.getLogger(__name__)
 
-def _run_shopee_logic(keyword: str, limit: int = 30) -> list:
+def _run_shopee_logic(keyword: str, limit = 30):
     """
     Logic chính của Playwright chạy ở chế độ ĐỒNG BỘ (Sync)
     để tránh xung đột Event Loop trên Windows.
@@ -43,6 +45,7 @@ def _run_shopee_logic(keyword: str, limit: int = 30) -> list:
 
                             shopid = item_basic.get('shopid')
                             itemid = item_basic.get('itemid')
+                            key = f"shopee_{itemid}" if itemid else None
 
                             # 1. Ghép URL sản phẩm
                             product_url = f"https://shopee.vn/product/{shopid}/{itemid}" if shopid and itemid else ""
@@ -77,6 +80,7 @@ def _run_shopee_logic(keyword: str, limit: int = 30) -> list:
 
                             # 6. Map vào Object chuẩn
                             mapped_item = {
+                                "key": key,
                                 "platform": "shopee",
                                 "product_id": itemid,
                                 "name": item_basic.get('name'),
@@ -106,7 +110,7 @@ def _run_shopee_logic(keyword: str, limit: int = 30) -> list:
             # Chờ networkidle ở bản sync
             page.goto(search_url, wait_until="networkidle", timeout=30000)
             # Nghỉ thêm một chút để đảm bảo intercept kịp
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(random.randint(4000, 8000))
         except Exception as e:
             logger.error(f"❌ Lỗi khi tải trang: {e}")
         finally:
@@ -121,3 +125,119 @@ async def fetch_shopee_data(keyword: str, limit: int = 30) -> list:
     """
     # CHÌA KHÓA: Đẩy logic sync vào một thread riêng để né lỗi Event Loop của ADK
     return await asyncio.to_thread(_run_shopee_logic, keyword, limit)  # Giới hạn 10 sản phẩm
+
+
+async def intercept_shopee_api(keyword: str):
+    """
+    Tool tìm kiếm sản phẩm Shopee thông qua kỹ thuật Network Interception.
+    Đã được tối ưu để chạy trên Windows.
+    """
+    # CHÌA KHÓA: Đẩy logic sync vào một thread riêng để né lỗi Event Loop của ADK
+    return await asyncio.to_thread(_run_shopee_logic, keyword)
+
+
+async def process_keyword(kw: str, semaphore: asyncio.Semaphore) -> list:
+    """
+    Hàm bọc (wrapper) để chạy keyword, có kiểm soát luồng và thời gian nghỉ.
+    """
+    async with semaphore:
+        # 1. Dãn thời gian: Nghỉ ngẫu nhiên 2 - 5 giây trước khi thực hiện để né Anti-bot Shopee
+        delay = random.uniform(15.0, 25.0)
+        await asyncio.sleep(delay)
+
+        try:
+            res = await intercept_shopee_api(kw)
+            print(f"✅ Xong: {kw} - Thu được: {len(res)} SP")
+            return res
+        except Exception as e:
+            print(f"❌ Lỗi ở keyword '{kw}': {e}")
+            return []
+
+# Block test nhanh
+# if __name__ == "__main__":
+#     logging.basicConfig(level=logging.INFO)
+#     res = asyncio.run(intercept_shopee_api("Giày thể thao nam"))
+#     for item in res:
+#         # Dữ liệu trả về giờ là dict, cần truy cập bằng key
+#         price = float(item.get('price', 0)) / 100000
+#         print(f"Product: {item.get('name', 'N/A')} - Price: {price} VND")
+#         print(f"Thông tin chi tiết (raw):\n")
+#         print(json.dumps(item, ensure_ascii=False, indent=2))
+#         print("---" * 20)
+
+#Multi keyword test
+async def main():
+    results = []
+    # 2. Kiểm soát đồng thời: Chỉ cho phép mở TỐI ĐA 3 trình duyệt Chromium cùng lúc
+    keywords = [
+        "Giày thể thao nữ",
+        "Balo ví & Organizer nữ",
+        "Nón phụ nữ",
+        "Rucksacks",
+        "Cổ áo nam, Cummerbunds và Pocket Squares",
+        "Quần lót & Áo lót nữ",
+        "Đồng hồ nữ",
+        "Trang phục nữ",
+        "Quần áo chuyên dụng cho từng môn thể thao",
+        "Giày leggings nữ",
+        "Giày thể thao nam",
+        "Giày bốt nữ",
+        "Balo ví nam",
+        "Trang sức khuyên nữ",
+        "Đầm nữ",
+        "Quần áo nam",
+        "Hộp trang sức và tổ chức trang sức",
+        "Quần jumpsuit, romper và overall nữ",
+        "Trang sức body nữ",
+        "Giày bệt nữ",
+        "Áo trên người nữ",
+        "Đồ bơi và áo khoác ngoài dành cho nữ",
+        "Giày nam",
+        "Giày tất nữ",
+        "Quần nam",
+        "Giày thể thao nam",
+        "Áo suit & Áo khoác thể thao nam",
+        "Quần jean nam",
+        "Trang sức nữ",
+        "Quần áo tập yoga nữ",
+    ]
+    semaphore = asyncio.Semaphore(2)
+
+    tasks = []
+    for kw in keywords:
+        # 3. Tạo task bất đồng bộ
+        task = asyncio.create_task(process_keyword(kw, semaphore))
+        tasks.append(task)
+
+    print(f"🚀 Bắt đầu quét {len(keywords)} keywords...")
+
+    # Chờ tất cả các task hoàn thành
+    all_results = await asyncio.gather(*tasks)
+
+    # Gộp kết quả từ các task (list of lists) thành 1 list duy nhất
+    for r in all_results:
+        if r:
+            results.extend(r)
+
+    print(f"\n🎉 HOÀN THÀNH! Tổng số sản phẩm trích xuất: {len(results)}")
+    return results
+
+if __name__ == '__main__':
+    # 4. Chỉ khởi tạo Event Loop 1 lần duy nhất
+    final_data = asyncio.run(main())
+    # 3. Logic lưu file JSONL
+    if final_data:
+        output_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\shopee_data.jsonl'
+
+        # Mở file với mode 'w' và encoding 'utf-8' để không lỗi font tiếng Việt
+        # Nếu file đã tồn tại, mode 'a' sẽ thêm vào cuối file mà không ghi đè
+        with open(output_path, 'a', encoding='utf-8') as f:
+            for item in final_data:
+                # json.dumps chuyển dict thành chuỗi JSON.
+                # ensure_ascii=False giúp giữ nguyên dấu tiếng Việt (ví dụ: "Áo" thay vì "\u00c1o")
+                json_string = json.dumps(item, ensure_ascii=False)
+                f.write(json_string + '\n')  # Ghi mỗi object trên 1 dòng mới
+
+        print(f"📁 Đã lưu thành công {len(final_data)} sản phẩm vào file. Đường dẫn: {output_path}")
+    else:
+        print("⚠️ Không có dữ liệu nào được trích xuất để lưu.")

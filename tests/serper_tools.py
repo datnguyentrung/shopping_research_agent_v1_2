@@ -1,7 +1,7 @@
 import json
 
 # 1. Đọc dữ liệu từ file JSON
-file_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\serper_ouput.json'
+file_path = r'/data/vertex_product.jsonl'
 
 try:
     with open(file_path, 'r', encoding='utf-8') as file:

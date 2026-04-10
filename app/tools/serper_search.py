@@ -87,7 +87,7 @@ async def serper_search(keyword: str) -> List[CapturedData]:
   return [item.model_dump() for item in captured_list]
 
 # # 3. Đường dẫn file JSON của bạn
-# file_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\serper_ouput.json'
+# file_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\vertex_product.jsonl'
 #
 # # 4. Lưu response vào file JSON
 # with open(file_path, 'w', encoding='utf-8') as f:

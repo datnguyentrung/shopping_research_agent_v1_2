@@ -86,6 +86,16 @@ async def stream_shopping_agent(payload: ChatRequest):
     try:
         if session["phase"] == "QUESTIONNAIRE":
             if action in ["SUBMIT_SURVEY", "SKIP_SURVEY"]:
+
+                last_options_text = ""
+                if action == "SUBMIT_SURVEY":
+                    if isinstance(data, list):
+                        last_options_text = "Đang cập nhật tìm kiếm: " + ", ".join(str(x) for x in data)
+                    else:
+                        last_options_text = f"Đang cập nhật tìm kiếm: {data}"
+                elif action == "SKIP_SURVEY":
+                    last_options_text = "Đã bỏ qua tiêu chí trước."
+
                 # Lưu câu trả lời nếu có
                 if action == "SUBMIT_SURVEY":
                     # data lúc này là list các option ID được chọn
@@ -100,6 +110,11 @@ async def stream_shopping_agent(payload: ChatRequest):
                 if session["attributes"]:
                     next_attr = session["attributes"].pop(0)
                     session["current_attribute_id"] = next_attr['id']
+
+                    # Yield text trước để nó hiện lên chat bubble
+                    if last_options_text:
+                        yield MessageChunk(content=last_options_text)
+
                     yield _build_questionnaire_chunk(next_attr)
                 else:
                     # Hết câu hỏi -> Chuyển phase chờ sản phẩm
@@ -191,7 +206,9 @@ async def stream_shopping_agent(payload: ChatRequest):
 # ------------- CÁC HÀM HELPER ĐỂ BUILD UI CHUNK ----------
 # ---------------------------------------------------------
 def _build_questionnaire_chunk(attr: dict) -> A2UIChunk:
+    content_text = "Đang cập nhật tìm kiếm: " + attr.get("last_options", "")
     return A2UIChunk(
+        content=content_text,
         a2ui={
             "type": "a2ui_questionnaire",
             "data": {
