@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import pandas as pd
 from llama_cpp import Llama
 import re
 from functools import lru_cache
@@ -6,8 +8,12 @@ from app.utils.load_instruction_from_file import load_instruction_from_file
 
 MODEL_PATH = r"D:\Thực tập MB\Shopping_Research_Agent_V1_2\models\Qwen2.5\Qwen2.5-7B-Instruct-Q6_K.gguf"
 
+PROMPT = r"D:\Thực tập MB\Shopping_Research_Agent_V1_2\app\prompts\translate_and_fix.md"
+PROMPT_BATCH = r"D:\Thực tập MB\Shopping_Research_Agent_V1_2\app\prompts\translate_and_fix_batch.md"
+
 llm = None
-PROMPT_TEMPLATE = None
+PROMPT_TEMPLATE = ""
+PROMPT_BATCH_TEMPLATE = ""
 
 # ── Regex constants ──────────────────────────────────────────────────────────
 _VI_DIACRITIC = re.compile(
@@ -43,18 +49,21 @@ _BAD_PATTERNS = re.compile(
 
 # ── Init ─────────────────────────────────────────────────────────────────────
 def init_qwen_model():
-    global llm, PROMPT_TEMPLATE
+    global llm, PROMPT_TEMPLATE, PROMPT_BATCH_TEMPLATE
     print("🚀 Đang khởi động Qwen GGUF...")
+
     try:
-        PROMPT_TEMPLATE = load_instruction_from_file("prompts/translate_and_fix.md")
+        PROMPT_TEMPLATE = load_instruction_from_file(PROMPT)
+        PROMPT_BATCH_TEMPLATE = load_instruction_from_file(PROMPT_BATCH)
+        print("✅ Đã tải xong nội dung Prompt!")
     except Exception as e:
-        print("❌ Lỗi tải file prompt!")
+        print(f"❌ Lỗi tải file prompt: {e}")
         raise e
     try:
         llm = Llama(
             model_path=MODEL_PATH,
             n_gpu_layers=-1,
-            n_ctx=1024,
+            n_ctx=2048,
             n_threads=4,
             verbose=False,
         )
@@ -136,7 +145,7 @@ def _call_llm(prompt: str) -> str:
 # ── Hàm chính ────────────────────────────────────────────────────────────────
 @lru_cache(maxsize=2048)
 def translate_and_fix(text: str) -> tuple[str, str]:
-    if llm is None or PROMPT_TEMPLATE is None:
+    if llm is None or PROMPT is None:
         raise RuntimeError("Chưa gọi init_qwen_model().")
 
     text = text.strip()
@@ -151,7 +160,7 @@ def translate_and_fix(text: str) -> tuple[str, str]:
     if is_clean_english(text_clean):
         return text_clean, text_clean
 
-    prompt = PROMPT_TEMPLATE.replace("{input}", text_clean)
+    prompt = PROMPT.replace("{input}", text_clean)
     raw = _call_llm(prompt)
     vi, en = _parse_output(raw)
 
@@ -163,36 +172,80 @@ def translate_and_fix(text: str) -> tuple[str, str]:
     print(f"✅ {text!r:30s} → '{vi}' | '{en}'")
     return vi, en
 
-
-# ── Batch ────────────────────────────────────────────────────────────────────
-def translate_and_fix_batch(
-        texts: list[str],
-        max_workers: int = 4,
-) -> list[tuple[str, str]]:
-    results: list[tuple[str, str] | None] = [None] * len(texts)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_index = {
-            executor.submit(translate_and_fix, t): i
-            for i, t in enumerate(texts)
-        }
-        for future in as_completed(future_to_index):
-            i = future_to_index[future]
-            try:
-                results[i] = future.result()
-            except Exception as e:
-                print(f"⚠️  Lỗi index {i} ({texts[i]!r}): {e}")
-                results[i] = (texts[i], texts[i])
-    return results  # type: ignore[return-value]
-
-
 # ── Test ─────────────────────────────────────────────────────────────────────
+# if __name__ == "__main__":
+#     init_qwen_model()
+#     while True:
+#         user_input = input("\nNhập keyword ('q' để thoát): ")
+#         if user_input.lower() == "q":
+#             break
+#         vi, en = translate_and_fix(user_input)
+#         print(f"  VI : {vi}")
+#         print(f"  EN : {en}")
+#     print(f"\n📊 Cache: {translate_and_fix.cache_info()}")
+
+def chunk_list(lst, chunk_size):
+    """Chia danh sách lớn thành các danh sách nhỏ."""
+    for i in range(0, len(lst), chunk_size):
+        yield lst[i:i + chunk_size]
+
+
+def translate_batch_chunk(chunk_texts: list[str]) -> list[tuple[str, str]]:
+    """Gửi một list khoảng 15-20 từ vào LLM cùng lúc."""
+    # 1. Tạo chuỗi input có đánh số thứ tự
+    input_str = "\n".join([f"{i + 1}. {text}" for i, text in enumerate(chunk_texts)])
+
+    # 2. Đưa vào prompt
+    prompt = PROMPT_BATCH_TEMPLATE.replace("{input}", input_str)
+
+    # 3. Gọi LLM (Nhớ tăng max_tokens lên vì output giờ dài hơn)
+    raw_output = llm(
+        prompt,
+        max_tokens=2048,  # Tăng lên để đủ chỗ chứa 20 dòng output
+        temperature=0.0,
+        stop=["<|im_end|>"],
+        echo=False,
+    )["choices"][0]["text"]
+
+    # 4. Parse kết quả trả về
+    results = []
+    lines = raw_output.strip().split('\n')
+    for line in lines:
+        # Xóa số thứ tự ở đầu dòng (VD: "1. Áo thun | T-shirt" -> "Áo thun | T-shirt")
+        clean_line = re.sub(r'^\d+\.\s*', '', line)
+        vi, en = _parse_output(clean_line)
+        results.append((vi, en))
+
+    # Trả về kèm fallback nếu LLM bị lỡ mất dòng nào
+    while len(results) < len(chunk_texts):
+        results.append((chunk_texts[len(results)], chunk_texts[len(results)]))
+
+    return results
+
+
+# Tích hợp vào hàm Main
 if __name__ == "__main__":
     init_qwen_model()
-    while True:
-        user_input = input("\nNhập keyword ('q' để thoát): ")
-        if user_input.lower() == "q":
-            break
-        vi, en = translate_and_fix(user_input)
-        print(f"  VI : {vi}")
-        print(f"  EN : {en}")
-    print(f"\n📊 Cache: {translate_and_fix.cache_info()}")
+    df = pd.read_csv(r"D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\category.csv")
+    df = df[df['Depth'] == 5]
+    test_inputs = df['Name'].tolist()
+
+    print(f"🚀 Bắt đầu dịch batch {len(test_inputs)} từ...")
+
+    all_results = []
+    chunk_size = 20  # Xử lý 20 từ mỗi lần gọi AI
+
+    # Chạy vòng lặp tuần tự từng chunk (rất nhanh, không cần đa luồng)
+    for i, chunk in enumerate(chunk_list(test_inputs, chunk_size)):
+        print(f"Đang xử lý Chunk {i + 1}...")
+        chunk_res = translate_batch_chunk(chunk)
+        all_results.extend(chunk_res)
+
+        for (vi, en) in chunk_res:
+            print(f"  '{vi}' | '{en}'")
+
+    print(f"\n✅ Hoàn thành dịch batch! Tổng {len(all_results)} kết quả.")
+
+    print("\n" + "=" * 50)
+    for vi, en in all_results:
+        print(f'"{vi}",')

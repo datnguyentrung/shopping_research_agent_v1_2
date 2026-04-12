@@ -1,243 +1,328 @@
-import asyncio
 import json
 import logging
 import random
-import urllib
+import os
+import time
+import re
 
 from patchright.sync_api import sync_playwright
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def _run_shopee_logic(keyword: str, limit = 30):
-    """
-    Logic chính của Playwright chạy ở chế độ ĐỒNG BỘ (Sync)
-    để tránh xung đột Event Loop trên Windows.
-    """
-    keyword_encoded = urllib.parse.quote(keyword)
-    search_url = f"https://shopee.vn/search?keyword={keyword_encoded}"
-    extracted_data = []
+# =======================================================
+# CẤU HÌNH ĐƯỜNG DẪN DỮ LIỆU
+# =======================================================
+SHOPEE_CATEGORY_TREE = r"D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\shopee_category_tree.json"
+SHOPEE_DATA = r"D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\shopee_data.jsonl"
 
-    # Sử dụng sync_playwright
-    with sync_playwright() as p:
-        # Khởi chạy trình duyệt
-        browser = p.chromium.launch(
-            headless=True,
-            args=['--disable-blink-features=AutomationControlled']
-        )
+os.makedirs(os.path.dirname(SHOPEE_DATA), exist_ok=True)
 
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080}
-        )
-        page = context.new_page()
 
-        # ==========================================
-        # HÀM LẮNG NGHE & MAP DỮ LIỆU
-        # ==========================================
-        def handle_response(response):
-            if "api/v4/search/search_items" in response.url and response.status == 200:
-                try:
-                    data = response.json()
-                    items = data.get('items', [])
-                    if items:
-                        for item in items[:limit]:
-                            item_basic = item.get('item_basic', {})
+# =======================================================
+# HÀM TẠO URL CHUẨN SHOPEE (SLUGIFY)
+# =======================================================
+def generate_shopee_url(display_name, catid, page_num=0):
+    """Tạo URL chuẩn của Shopee dạng: /Ten-Danh-Muc-cat.ID?page=X"""
+    # Thay thế & thành khoảng trắng
+    name = display_name.replace("&", " ")
+    # Loại bỏ ký tự đặc biệt, giữ lại chữ, số, tiếng Việt và khoảng trắng
+    name = re.sub(r'[^\w\s-]', '', name)
+    # Thay nhiều khoảng trắng thành 1 dấu gạch ngang
+    name = re.sub(r'\s+', '-', name).strip('-')
 
-                            shopid = item_basic.get('shopid')
-                            itemid = item_basic.get('itemid')
-                            key = f"shopee_{itemid}" if itemid else None
+    # Nếu tên bị rỗng sau khi lọc, fallback về 'a' (như shopee.vn/a-cat.123)
+    if not name:
+        name = 'a'
 
-                            # 1. Ghép URL sản phẩm
-                            product_url = f"https://shopee.vn/product/{shopid}/{itemid}" if shopid and itemid else ""
+    return f"https://shopee.vn/{name}-cat.{catid}?page={page_num}"
 
-                            # 2. Xử lý chia giá (loại bỏ phần nghìn tỷ của Shopee)
-                            raw_price = item_basic.get('price', 0)
-                            price_current = float(raw_price) / 100000 if raw_price else 0
 
-                            raw_price_before = item_basic.get('price_before_discount', 0)
-                            price_original = float(raw_price_before) / 100000 if raw_price_before else 0
+# =======================================================
+# 1. HÀM MAP DỮ LIỆU CHUẨN SCHEMA (Đã mở rộng lưới)
+# =======================================================
+def extract_and_map_data(response, extracted_data):
+    if response.request.resource_type in ["image", "stylesheet", "font", "media", "script"]:
+        return True
 
-                            # 3. Ghép link ảnh chính
-                            raw_image = item_basic.get('image', '')
-                            main_image = f"https://down-vn.img.susercontent.com/file/{raw_image}" if raw_image else ""
+    url = response.url
 
-                            # 4. Xử lý Rating Count (Shopee trả về mảng, index [0] là tổng)
-                            item_rating = item_basic.get('item_rating', {})
-                            rating_count_raw = item_rating.get('rating_count')
-                            if isinstance(rating_count_raw, list) and len(rating_count_raw) > 0:
-                                rating_count = rating_count_raw[0]
-                            else:
-                                rating_count = rating_count_raw if isinstance(rating_count_raw, (int, float)) else 0
-
-                            # 5. Xử lý tier_variations: Loại bỏ 'images', chỉ giữ 'name' và 'options'
-                            raw_variations = item_basic.get('tier_variations', [])
-                            clean_variations = []
-                            for v in raw_variations:
-                                clean_variations.append({
-                                    "name": v.get("name", ""),
-                                    "options": v.get("options", [])
-                                })
-
-                            # 6. Map vào Object chuẩn
-                            mapped_item = {
-                                "key": key,
-                                "platform": "shopee",
-                                "product_id": itemid,
-                                "name": item_basic.get('name'),
-                                "price_current": price_current,
-                                "price_original": price_original,
-                                "currency": "VND",
-                                "main_image": main_image,
-                                "rating_star": item_rating.get('rating_star', 0),
-                                "rating_count": rating_count,
-                                "sold_count": item_basic.get('historical_sold', 0),
-                                "shop": {
-                                    "shop_id": shopid,
-                                    "shop_name": "",  # Search API Shopee thường không có tên shop ở đây
-                                    "shop_location": item_basic.get('shop_location')
-                                },
-                                "tier_variations": clean_variations,
-                                "product_url": product_url
-                            }
-                            extracted_data.append(mapped_item)
-                except Exception as e:
-                    logger.warning(f"⚠️ Lỗi khi đọc/map JSON: {e}")
-
-        page.on("response", handle_response)
+    # Bắt cả search_items (Cũ) và recommend_v2 (Mới)
+    if "api/v4/search/search_items" in url or "api/v4/recommend/recommend_v2" in url:
+        if response.status == 403:
+            return "CAPTCHA_DETECTED"
 
         try:
-            logger.info(f"🚀 Đang truy cập Shopee để tìm: {keyword}...")
-            # Chờ networkidle ở bản sync
-            page.goto(search_url, wait_until="networkidle", timeout=30000)
-            # Nghỉ thêm một chút để đảm bảo intercept kịp
-            page.wait_for_timeout(random.randint(4000, 8000))
+            res_text = response.text()
+            if "90309999" in res_text:
+                return "CAPTCHA_DETECTED"
+
+            data = json.loads(res_text)
+            items = []
+
+            # --- LUỒNG 1: XỬ LÝ CHUẨN CŨ (Trang Search) ---
+            if 'items' in data:
+                for i in data['items']:
+                    items.append({"source": "search", "data": i})
+
+            # --- LUỒNG 2: XỬ LÝ CHUẨN MỚI (Trang Danh Mục recommend_v2) ---
+            elif 'data' in data and 'units' in data['data']:
+                for unit in data['data']['units']:
+                    # Chỉ lấy những unit có chứa 'item'
+                    if unit.get('data_type') == 'item' and 'item' in unit:
+                        items.append({"source": "recommend_v2", "data": unit['item']})
+
+            if not items:
+                return "EMPTY"
+
+            logger.info(f"🔥 BẮT TRÚNG MẠCH! Hốt trọn {len(items)} sản phẩm.")
+
+            # --- MAP VÀO SCHEMA ---
+            for item_wrapper in items:
+                source = item_wrapper["source"]
+                item = item_wrapper["data"]
+
+                # Khởi tạo biến trống
+                itemid, shopid, name, raw_price, raw_price_before = None, None, "", 0, 0
+                raw_image, shop_location, sold_count = "", "", 0
+                item_rating, raw_variations = {}, []
+
+                if source == "search":
+                    item_basic = item.get('item_basic', {})
+                    itemid = item_basic.get('itemid')
+                    shopid = item_basic.get('shopid')
+                    name = item_basic.get('name', "")
+                    raw_price = item_basic.get('price', 0)
+                    raw_price_before = item_basic.get('price_before_discount', 0)
+                    raw_image = item_basic.get('image', '')
+                    item_rating = item_basic.get('item_rating', {})
+                    raw_variations = item_basic.get('tier_variations', [])
+                    sold_count = item_basic.get('historical_sold', 0)
+                    shop_location = item_basic.get('shop_location', "")
+
+                elif source == "recommend_v2":
+                    item_data = item.get('item_data', {})
+                    item_asset = item.get('item_card_displayed_asset', {})
+
+                    itemid = item_data.get('itemid')
+                    shopid = item_data.get('shopid')
+                    name = item_asset.get('name', "")
+
+                    price_info = item_data.get('item_card_display_price', {})
+                    raw_price = price_info.get('price', 0)
+                    raw_price_before = price_info.get('strikethrough_price', 0)
+
+                    raw_image = item_asset.get('image', '')
+                    item_rating = item_data.get('item_rating', {})
+                    raw_variations = item_data.get('tier_variations', [])
+
+                    shop_data = item_data.get('shop_data', {})
+                    shop_location = shop_data.get('shop_location', "")
+
+                    # API mới ẩn số sold_count tuyệt đối, thường trả text "Đã bán 10k+".
+                    # Tạm gán 0 để không bị lỗi schema.
+                    sold_count = 0
+
+                    # Bỏ qua nếu thiếu ID
+                if not itemid or not shopid:
+                    continue
+
+                # --- CHUẨN HOÁ DỮ LIỆU CUỐI CÙNG ---
+                price_current = float(raw_price) / 100000 if raw_price else 0.0
+                price_original = float(raw_price_before) / 100000 if raw_price_before else None
+                main_image = f"https://down-vn.img.susercontent.com/file/{raw_image}" if raw_image else ""
+                product_url = f"https://shopee.vn/product/{shopid}/{itemid}"
+
+                rating_count_raw = item_rating.get('rating_count', [0])
+                rating_count = rating_count_raw[0] if isinstance(rating_count_raw, list) and len(
+                    rating_count_raw) > 0 else 0
+
+                clean_variations = [{"name": v.get("name", ""), "options": v.get("options", [])} for v in
+                                    raw_variations]
+
+                mapped_item = {
+                    "key": f"shopee_{itemid}",
+                    "platform": "shopee",
+                    "product_id": str(itemid),
+                    "product_url": product_url,
+                    "name": name,
+                    "price_current": price_current,
+                    "price_original": price_original,
+                    "currency": "VND",
+                    "main_image": main_image,
+                    "rating_star": float(item_rating.get('rating_star', 0.0)) if isinstance(item_rating, dict) else 0.0,
+                    "rating_count": int(rating_count),
+                    "sold_count": int(sold_count),
+                    "shop": {
+                        "shop_id": str(shopid),
+                        "shop_name": "",
+                        "shop_location": shop_location
+                    },
+                    "tier_variations": clean_variations
+                }
+                extracted_data.append(mapped_item)
+            return True
+
         except Exception as e:
-            logger.error(f"❌ Lỗi khi tải trang: {e}")
-        finally:
-            browser.close()
+            logger.error(f"❌ Lỗi parse JSON: {e}")
+            return True
+
+    return True
+
+# =======================================================
+# 2. LOGIC QUÉT 1 CATEGORY ID
+# =======================================================
+def scrape_category_sync(context, catid, full_name, slug_name, max_pages=5):
+    """Quét sản phẩm bằng cách Click UI để ép gọi API"""
+    extracted_data = []
+    page = context.pages[0] if context.pages else context.new_page()
+
+    has_more_data = True
+    captcha_detected = False
+
+    def handle_response(res):
+        nonlocal has_more_data, captcha_detected
+        result = extract_and_map_data(res, extracted_data)
+        if result == "EMPTY":
+            pass  # Bỏ qua, vì khi click UI có thể có lúc API trả rỗng giả
+        elif result == "CAPTCHA_DETECTED":
+            captcha_detected = True
+
+    # Xóa và gắn lại listener để chống trùng lặp event
+    page.remove_listener("response", handle_response)
+    page.on("response", handle_response)
+
+    try:
+        # 1. GOTO ĐÚNG 1 LẦN VÀO TRANG ĐẦU TIÊN
+        target_url = generate_shopee_url(slug_name, catid, page_num=0)
+        logger.info(f"🚀 Mở danh mục [ {full_name} ]...")
+
+        try:
+            page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            logger.warning(f"⚠️ Load trang hơi chậm: {e}. Vẫn tiếp tục...")
+
+        if captcha_detected:
+            logger.warning("⚠️ TẠM DỪNG: Vui lòng giải Captcha.")
+            input("👉 Click vào 1 chỗ trống trên web rồi nhấn ENTER tại đây...")
+            captcha_detected = False
+            page.reload(wait_until="domcontentloaded")
+
+        # 2. BẮT ĐẦU VÒNG LẶP CUỘN CHUỘT VÀ CLICK NEXT
+        for page_num in range(max_pages):
+            if not has_more_data or captcha_detected:
+                break
+
+            logger.info(f"🔄 Đang nghe ngóng data [ {full_name} ] - Trang {page_num}...")
+
+            # Cuộn chuột sâu xuống để Shopee bung API lấy 30 sản phẩm cuối của trang hiện tại
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(2000)
+            page.mouse.wheel(0, 3500)
+            page.wait_for_timeout(3000)
+
+            # 3. CLICK NÚT SANG TRANG (Bỏ qua nếu đang ở trang cuối cùng của vòng lặp)
+            if page_num < max_pages - 1:
+                try:
+                    # Nút > (Next Page) của Shopee thường nằm trong class shopee-icon-button--right
+                    next_button = page.locator('.shopee-icon-button--right').first
+
+                    if next_button.is_visible() and not next_button.is_disabled():
+                        logger.info("👉 Click sang trang tiếp theo...")
+                        next_button.click()
+                        page.wait_for_timeout(4000)  # Đứng chờ 4s cho API nhả data về
+                    else:
+                        logger.info("⚠️ Nút chuyển trang bị mờ hoặc không tìm thấy (Đã hết SP).")
+                        break
+                except Exception as e:
+                    logger.error(f"Lỗi khi click nút sang trang: {e}")
+                    break
+
+    except Exception as e:
+        logger.error(f"❌ Lỗi ở danh mục {full_name}: {e}")
+    finally:
+        # Nhớ tháo thính sau khi câu xong
+        page.remove_listener("response", handle_response)
 
     return extracted_data
 
-async def fetch_shopee_data(keyword: str, limit: int = 30) -> list:
-    """
-    Tool tìm kiếm sản phẩm Shopee thông qua kỹ thuật Network Interception.
-    Đã được tối ưu để chạy trên Windows.
-    """
-    # CHÌA KHÓA: Đẩy logic sync vào một thread riêng để né lỗi Event Loop của ADK
-    return await asyncio.to_thread(_run_shopee_logic, keyword, limit)  # Giới hạn 10 sản phẩm
+# =======================================================
+# 3. HÀM CHÍNH (MAIN)
+# =======================================================
+def main():
+    target_categories = []
+    try:
+        with open(SHOPEE_CATEGORY_TREE, "r", encoding="utf-8") as f:
+            tree_data = json.load(f)
+            category_list = tree_data.get("data", {}).get("category_list", [])
+
+            for cat in category_list:
+                level_1_name = cat.get("display_name")
+                children = cat.get("children", [])
+
+                if children:
+                    for child in children:
+                        target_categories.append({
+                            "catid": child.get("catid"),
+                            "full_name": f"{level_1_name} > {child.get('display_name')}",
+                            "slug_name": child.get('display_name')  # Lấy tên ngắn để tạo URL
+                        })
+                else:
+                    target_categories.append({
+                        "catid": cat.get("catid"),
+                        "full_name": level_1_name,
+                        "slug_name": level_1_name
+                    })
+    except FileNotFoundError:
+        logger.error(f"❌ Không tìm thấy file: {SHOPEE_CATEGORY_TREE}")
+        return
+
+    logger.info(f"📁 Tìm thấy {len(target_categories)} danh mục mục tiêu.")
+
+    # Lấy 5 danh mục đầu tiên để chạy thử nghiệm
+    test_categories = target_categories[5:]
+    total_scraped = 0
+
+    with sync_playwright() as p:
+        user_data_dir = os.path.join(os.getcwd(), "shopee_chrome_profile")
+
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=False,
+            ignore_default_args=["--enable-automation"],  # Xóa thanh cảnh báo test software
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox'
+            ],
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080}
+        )
+
+        for cat in test_categories:
+            catid = cat['catid']
+            full_name = cat['full_name']
+            slug_name = cat['slug_name']
+
+            # Gọi hàm quét truyền cả full_name (để log) và slug_name (để tạo URL)
+            res = scrape_category_sync(context, catid, full_name, slug_name, max_pages=5)
+
+            if res:
+                total_scraped += len(res)
+                with open(SHOPEE_DATA, "a", encoding="utf-8") as f:
+                    for item in res:
+                        f.write(json.dumps(item, ensure_ascii=False) + '\n')
+                logger.info(f"✅ Đã lưu {len(res)} SP từ [{full_name}] vào file.")
+            else:
+                logger.info(f"⚠️ Không lấy được SP nào từ [{full_name}]")
+
+            delay = random.uniform(8.0, 15.0)
+            logger.info(f"⏳ Nghỉ {delay:.1f}s...\n")
+            time.sleep(delay)
+
+        context.close()
+
+    logger.info(f"🎉 HOÀN THÀNH! Tổng số sản phẩm lấy được phiên này: {total_scraped}")
 
 
-async def intercept_shopee_api(keyword: str):
-    """
-    Tool tìm kiếm sản phẩm Shopee thông qua kỹ thuật Network Interception.
-    Đã được tối ưu để chạy trên Windows.
-    """
-    # CHÌA KHÓA: Đẩy logic sync vào một thread riêng để né lỗi Event Loop của ADK
-    return await asyncio.to_thread(_run_shopee_logic, keyword)
-
-
-async def process_keyword(kw: str, semaphore: asyncio.Semaphore) -> list:
-    """
-    Hàm bọc (wrapper) để chạy keyword, có kiểm soát luồng và thời gian nghỉ.
-    """
-    async with semaphore:
-        # 1. Dãn thời gian: Nghỉ ngẫu nhiên 2 - 5 giây trước khi thực hiện để né Anti-bot Shopee
-        delay = random.uniform(15.0, 25.0)
-        await asyncio.sleep(delay)
-
-        try:
-            res = await intercept_shopee_api(kw)
-            print(f"✅ Xong: {kw} - Thu được: {len(res)} SP")
-            return res
-        except Exception as e:
-            print(f"❌ Lỗi ở keyword '{kw}': {e}")
-            return []
-
-# Block test nhanh
-# if __name__ == "__main__":
-#     logging.basicConfig(level=logging.INFO)
-#     res = asyncio.run(intercept_shopee_api("Giày thể thao nam"))
-#     for item in res:
-#         # Dữ liệu trả về giờ là dict, cần truy cập bằng key
-#         price = float(item.get('price', 0)) / 100000
-#         print(f"Product: {item.get('name', 'N/A')} - Price: {price} VND")
-#         print(f"Thông tin chi tiết (raw):\n")
-#         print(json.dumps(item, ensure_ascii=False, indent=2))
-#         print("---" * 20)
-
-#Multi keyword test
-async def main():
-    results = []
-    # 2. Kiểm soát đồng thời: Chỉ cho phép mở TỐI ĐA 3 trình duyệt Chromium cùng lúc
-    keywords = [
-        "Giày thể thao nữ",
-        "Balo ví & Organizer nữ",
-        "Nón phụ nữ",
-        "Rucksacks",
-        "Cổ áo nam, Cummerbunds và Pocket Squares",
-        "Quần lót & Áo lót nữ",
-        "Đồng hồ nữ",
-        "Trang phục nữ",
-        "Quần áo chuyên dụng cho từng môn thể thao",
-        "Giày leggings nữ",
-        "Giày thể thao nam",
-        "Giày bốt nữ",
-        "Balo ví nam",
-        "Trang sức khuyên nữ",
-        "Đầm nữ",
-        "Quần áo nam",
-        "Hộp trang sức và tổ chức trang sức",
-        "Quần jumpsuit, romper và overall nữ",
-        "Trang sức body nữ",
-        "Giày bệt nữ",
-        "Áo trên người nữ",
-        "Đồ bơi và áo khoác ngoài dành cho nữ",
-        "Giày nam",
-        "Giày tất nữ",
-        "Quần nam",
-        "Giày thể thao nam",
-        "Áo suit & Áo khoác thể thao nam",
-        "Quần jean nam",
-        "Trang sức nữ",
-        "Quần áo tập yoga nữ",
-    ]
-    semaphore = asyncio.Semaphore(2)
-
-    tasks = []
-    for kw in keywords:
-        # 3. Tạo task bất đồng bộ
-        task = asyncio.create_task(process_keyword(kw, semaphore))
-        tasks.append(task)
-
-    print(f"🚀 Bắt đầu quét {len(keywords)} keywords...")
-
-    # Chờ tất cả các task hoàn thành
-    all_results = await asyncio.gather(*tasks)
-
-    # Gộp kết quả từ các task (list of lists) thành 1 list duy nhất
-    for r in all_results:
-        if r:
-            results.extend(r)
-
-    print(f"\n🎉 HOÀN THÀNH! Tổng số sản phẩm trích xuất: {len(results)}")
-    return results
-
-if __name__ == '__main__':
-    # 4. Chỉ khởi tạo Event Loop 1 lần duy nhất
-    final_data = asyncio.run(main())
-    # 3. Logic lưu file JSONL
-    if final_data:
-        output_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\shopee_data.jsonl'
-
-        # Mở file với mode 'w' và encoding 'utf-8' để không lỗi font tiếng Việt
-        # Nếu file đã tồn tại, mode 'a' sẽ thêm vào cuối file mà không ghi đè
-        with open(output_path, 'a', encoding='utf-8') as f:
-            for item in final_data:
-                # json.dumps chuyển dict thành chuỗi JSON.
-                # ensure_ascii=False giúp giữ nguyên dấu tiếng Việt (ví dụ: "Áo" thay vì "\u00c1o")
-                json_string = json.dumps(item, ensure_ascii=False)
-                f.write(json_string + '\n')  # Ghi mỗi object trên 1 dòng mới
-
-        print(f"📁 Đã lưu thành công {len(final_data)} sản phẩm vào file. Đường dẫn: {output_path}")
-    else:
-        print("⚠️ Không có dữ liệu nào được trích xuất để lưu.")
+if __name__ == "__main__":
+    main()
