@@ -2,6 +2,7 @@ import asyncio
 import re
 from typing import List
 
+import httpx
 import requests
 import json
 from app.core.config.config import settings
@@ -58,42 +59,48 @@ def clean_vnd_price(price_str: str) -> float:
   return float(cleaned) if cleaned else 0.0
 
 
-
-async def serper_search(keyword: str) -> List[CapturedData]:
-  # 1. Dùng endpoint /search
+async def serper_search(keyword: str, min_price: float = None, max_price: float = None) -> List[CapturedData]:
   url = "https://google.serper.dev/shopping"
 
-  # 2. Payload với từ khóa giao dịch trực tiếp
   payload = {
     "q": keyword,
     "gl": "vn",
     "hl": "vi"
   }
 
+  # --- TÍCH HỢP CẢ MIN VÀ MAX VÀO CÚ PHÁP LỌC GIÁ ---
+  tbs_parts = ["mr:1", "price:1"]
+  has_price_filter = False
+
+  if min_price is not None and min_price > 0:
+    tbs_parts.append(f"ppr_min:{int(min_price)}")
+    has_price_filter = True
+
+  if max_price is not None and max_price > 0:
+    tbs_parts.append(f"ppr_max:{int(max_price)}")
+    has_price_filter = True
+
+  if has_price_filter:
+    payload["tbs"] = ",".join(tbs_parts)  # Ví dụ kết quả: mr:1,price:1,ppr_min:300000,ppr_max:600000
+  # ----------------------------------------------------
+
   headers = {
     'X-API-KEY': settings.SERPER_API_KEY,
     'Content-Type': 'application/json'
   }
 
-  print("Đang gọi API Serper...")
-  response = requests.post(url, headers=headers, json=payload)
+  print(f"Đang gọi API Serper với payload: {payload}")
+
+  loop = asyncio.get_event_loop()
+  response = await loop.run_in_executor(
+    None,
+    lambda: requests.post(url, headers=headers, json=payload)
+  )
+
   data = response.json()
-
-  # print("data:", data)
-
-  # Thực hiện Mapping
   captured_list = map_serper_to_captured_data(data)
 
   return [item.model_dump() for item in captured_list]
-
-# # 3. Đường dẫn file JSON của bạn
-# file_path = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\vertex_data.jsonl'
-#
-# # 4. Lưu response vào file JSON
-# with open(file_path, 'w', encoding='utf-8') as f:
-#     json.dump(data, f, ensure_ascii=False, indent=2)
-#
-# print(f"✅ Đã lưu kết quả thành công vào: {file_path}")
 
 if __name__ == "__main__":
     # Test hàm serper_search với một từ khóa mẫu

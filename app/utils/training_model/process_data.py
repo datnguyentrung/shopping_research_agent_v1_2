@@ -24,10 +24,10 @@ import unicodedata
 # ─────────────────────────────────────────────
 # CẤU HÌNH
 # ─────────────────────────────────────────────
-INPUT_PATH  = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\parquet_chunks'
+INPUT_PATH  = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\parquet_chunks_v2'
 OUTPUT_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\cleaned_training_data.csv'
 
-MAX_SAMPLES_PER_CATEGORY = 10_000   # Cap tối đa trên mỗi nhãn
+MAX_SAMPLES_PER_CATEGORY = 5_000   # Cap tối đa trên mỗi nhãn
 MIN_SAMPLES_PER_CATEGORY = 500      # 🗑️ MỚI: XÓA HOÀN TOÀN nhãn nếu số lượng < ngưỡng này
 MIN_SAMPLES_WARNING      = 1000     # Cảnh báo nếu nhãn < ngưỡng này (dành cho các nhãn đã qua ải MIN ở trên)
 MIN_QUERY_WORDS          = 1        # Tối thiểu 1 từ
@@ -119,7 +119,7 @@ def process_data(input_path: str, output_path: str):
 
     required_cols = {
         'search_query', 'category_id', 'category_name',
-        #'depth' # TODO: Bỏ 'depth' nếu không cần nữa
+        'depth' # TODO: Bỏ 'depth' nếu không cần nữa
     }
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
@@ -128,7 +128,7 @@ def process_data(input_path: str, output_path: str):
     # ── 2. Bỏ dòng null ──
     df = df.dropna(subset=[
         'search_query', 'category_id', 'category_name',
-        #'depth' # TODO: Bỏ 'depth' nếu không cần nữa
+        'depth' # TODO: Bỏ 'depth' nếu không cần nữa
     ])
     after_null = len(df)
     print(f"   Sau bỏ null: {after_null:,} (bỏ {initial_count - after_null:,})")
@@ -204,7 +204,7 @@ def process_data(input_path: str, output_path: str):
     # ── 9. Lưu ──
     df_final = df_final[[
         'category_id', 'category_name', 'search_query',
-        #'depth'  # TODO: Bỏ 'depth' nếu không cần nữa
+        'depth'  # TODO: Bỏ 'depth' nếu không cần nữa
     ]]
     df_final.to_csv(output_path, index=False, encoding='utf-8-sig')
 

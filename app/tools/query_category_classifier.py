@@ -4,7 +4,7 @@ import joblib
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-MODEL_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\models\query_category_classifier_v3\query_category_classifier'
+MODEL_PATH = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\models\query_category_classifier_v4\query_category_classifier'
 
 # Khai báo các biến global nhưng chưa khởi tạo
 tokenizer = None
@@ -80,6 +80,10 @@ def classify_keyword_topk(text, k=3):
             "category_name": final_name,
             "score": conf_score
         })
+
+    print(f"🔍 Dự đoán Top {k} cho '{text}':")
+    for rank, res in enumerate(results, 1):
+        print(f"   - Top {rank}: {res['category_name']} (ID: {res['category_id']}, Score: {res['score']:.2%})")
 
     return results
 

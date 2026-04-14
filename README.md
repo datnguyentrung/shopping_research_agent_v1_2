@@ -125,3 +125,53 @@ Frontend trong project co the dung truc tiep hook `useChatSSE` + `streamChat` nh
 - `app/agents/orchestrator.py`: Noi khai bao `flow_orchestrator_agent` va danh sach sub-agents.
 
 Khi mo rong them agent/tool, uu tien sua trong `app/agents/*` va `app/core/orchestrator_runtime.py`; han chế sửa `routes.py` va schema SSE de tranh vo contract FE.
+
+## Shopping Flow State Machine (onboarding nhanh)
+
+Luồng mua sắm được tổ chức theo kiểu **State Machine** trong `app/core/shopping_flow/stream.py`.
+Mỗi state có một handler riêng trong thư mục `app/core/shopping_flow/handlers/` để dễ đọc, dễ test, và dễ mở rộng.
+
+### Cấu trúc handler hiện tại
+
+- `app/core/shopping_flow/handlers/initial.py`: `INIT` - phân tích ý định, chọn category gốc.
+- `app/core/shopping_flow/handlers/category_drilldown.py`: `CATEGORY_DRILLDOWN` - đi sâu vào danh mục con.
+- `app/core/shopping_flow/handlers/questionnaire.py`: `QUESTIONNAIRE` - hỏi đáp thuộc tính.
+- `app/core/shopping_flow/handlers/product_swipe.py`: `PRODUCT_SWIPE` - nhận feedback like/dislike, chốt summary.
+
+### Sơ đồ state
+
+```mermaid
+stateDiagram-v2
+    [*] --> INIT: user message
+
+    INIT --> CATEGORY_DRILLDOWN: category has children
+    INIT --> QUESTIONNAIRE: leaf category + has attributes
+    INIT --> PRODUCT_SWIPE: leaf category + no attributes
+    INIT --> ERROR: classify/processing error
+
+    CATEGORY_DRILLDOWN --> CATEGORY_DRILLDOWN: SUBMIT_SURVEY + still has children
+    CATEGORY_DRILLDOWN --> QUESTIONNAIRE: reached leaf + has attributes
+    CATEGORY_DRILLDOWN --> PRODUCT_SWIPE: reached leaf + no attributes
+
+    QUESTIONNAIRE --> QUESTIONNAIRE: SUBMIT_SURVEY or SKIP_SURVEY + remaining questions
+    QUESTIONNAIRE --> PRODUCT_SWIPE: no remaining questions
+
+    PRODUCT_SWIPE --> PRODUCT_SWIPE: PRODUCT_FEEDBACK + continue swiping
+    PRODUCT_SWIPE --> FINAL_SUMMARY: enough likes/swipes or no more candidates
+
+    FINAL_SUMMARY --> DONE: summary completed
+    ERROR --> DONE
+```
+
+### Trigger chính theo hidden event
+
+- `SUBMIT_SURVEY`: gửi câu trả lời survey (category/attribute).
+- `SKIP_SURVEY`: bỏ qua câu hỏi thuộc tính hiện tại.
+- `PRODUCT_FEEDBACK`: gửi phản hồi swipe (`like`/`dislike`).
+
+### Cách thêm phase mới
+
+1. Tạo handler mới trong `app/core/shopping_flow/handlers/`.
+2. Đăng ký state trong `PHASE_EVENT_HANDLERS` ở `app/core/shopping_flow/stream.py`.
+3. Chuẩn hóa key phase lưu trong session (`session["phase"]`).
+4. Cập nhật sơ đồ trong README để onboarding không bị lệch luồng.

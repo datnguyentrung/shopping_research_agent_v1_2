@@ -14,7 +14,7 @@ async def lifespan(app: FastAPI):
     print("🚀 Starting up Shopping Research Agent API...")
 
     init_classifier_model()
-    init_qwen_model()
+    # init_qwen_model()
     print("✅ All models initialized successfully! API is ready to serve requests.")
 
     yield

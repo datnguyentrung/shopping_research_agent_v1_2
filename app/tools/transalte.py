@@ -1,9 +1,13 @@
+import types
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
+from google import genai
 from llama_cpp import Llama
 import re
 from functools import lru_cache
+
+from app.agents.base_agent import translation_agent
 from app.utils.load_instruction_from_file import load_instruction_from_file
 
 MODEL_PATH = r"D:\Thực tập MB\Shopping_Research_Agent_V1_2\models\Qwen2.5\Qwen2.5-7B-Instruct-Q6_K.gguf"
@@ -133,18 +137,18 @@ def _parse_output(raw: str) -> tuple[str, str]:
 def _call_llm(prompt: str) -> str:
     output = llm(
         prompt,
-        max_tokens=48,
-        temperature=0.0,
-        repeat_penalty=1.0,
-        stop=["<|im_end|>", "\n\n", "Input:"],
+        max_tokens=8192,
+        temperature=0.7,
+        # repeat_penalty=1.0,
+        # CHỈ GIỮ LẠI <|im_end|>
+        stop=["<|im_end|>"],
         echo=False,
     )
     return output["choices"][0]["text"]
 
-
 # ── Hàm chính ────────────────────────────────────────────────────────────────
 @lru_cache(maxsize=2048)
-def translate_and_fix(text: str) -> tuple[str, str]:
+async def translate_and_fix(text: str) -> tuple[str, str]:
     if llm is None or PROMPT is None:
         raise RuntimeError("Chưa gọi init_qwen_model().")
 
@@ -160,8 +164,11 @@ def translate_and_fix(text: str) -> tuple[str, str]:
     if is_clean_english(text_clean):
         return text_clean, text_clean
 
-    prompt = PROMPT.replace("{input}", text_clean)
+    prompt = PROMPT_TEMPLATE.replace("{input}", text_clean)
     raw = _call_llm(prompt)
+
+    print(f"🕵️ RAW AI OUTPUT: {repr(raw)}")
+
     vi, en = _parse_output(raw)
 
     # Nếu Validator fail, trả về text_clean (đã gộp chữ) thay vì text rác ban đầu
@@ -171,6 +178,53 @@ def translate_and_fix(text: str) -> tuple[str, str]:
 
     print(f"✅ {text!r:30s} → '{vi}' | '{en}'")
     return vi, en
+
+
+async def translate_and_fix_async(text: str) -> tuple[str, str]:
+    text = text.strip()
+
+    # Tiền xử lý gộp chữ (từ code Qwen cũ của bạn)
+    text_clean = re.sub(r'(?<=\b\w)\s+(?=\w\b)', '', text)
+    text_clean = text_clean.replace("&", "and")
+    if not text_clean:
+        return "", ""
+
+    if is_clean_english(text_clean):
+        return text_clean, text_clean
+
+    try:
+        # Khởi tạo Client (Nó sẽ tự động lấy API key từ môi trường GOOGLE_API_KEY)
+        client = genai.Client()
+
+        # Load prompt từ file .md của bạn (hoặc bạn dán thẳng string vào đây)
+        # Giả sử load_instruction_from_file trả về string prompt chứa {input}
+        from app.utils.load_instruction_from_file import load_instruction_from_file
+        system_prompt = load_instruction_from_file("prompts/translate_and_fix.md")
+
+        # Vì file md của bạn đang dùng cú pháp chat markup của Qwen (<|im_start|>),
+        # nên tốt nhất là ném nguyên cục đó vào làm prompt, thay thế {input}
+        full_prompt = system_prompt.replace("{input}", text_clean)
+
+        # Gọi Gemini chạy ngầm (Async)
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',  # Flash là dư sức cho tác vụ này
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.0,  # Để 0.0 cho độ chính xác cao nhất
+                max_output_tokens=100,
+            )
+        )
+
+        raw_text = response.text.strip()
+        print(f"🕵️ Gemini RAW OUTPUT: {repr(raw_text)}")
+
+        # Parse kết quả
+        vi, en = _parse_output(raw_text)
+        return vi, en
+
+    except Exception as e:
+        print(f"Lỗi dịch bằng Gemini: {e}")
+        return text_clean, text_clean
 
 # ── Test ─────────────────────────────────────────────────────────────────────
 # if __name__ == "__main__":

@@ -9,27 +9,72 @@ from app.tools.vertex_search import perform_search
 
 # Import các hàm bạn đã có: perform_search (Vertex), classify_keyword_topk, serper_search...
 
-async def run_parallel_searches(keyword_vi: str) -> list[CapturedData]:
+def _get_value(item, key: str):
+    if isinstance(item, dict):
+        return item.get(key)
+    return getattr(item, key, None)
+
+
+def _dedupe_by_platform_product_id(*sources):
+    """Giữ thứ tự xuất hiện đầu tiên, unique theo (platform, product_id)."""
+    seen: set[tuple[str, str]] = set()
+    merged = []
+
+    for source in sources:
+        if not source:
+            continue
+
+        for item in source:
+            platform = str(_get_value(item, "platform") or "").strip().lower()
+            product_id = str(_get_value(item, "product_id") or "").strip()
+
+            # Nếu thiếu 1 trong 2 trường khóa thì vẫn giữ lại để tránh mất dữ liệu.
+            if not platform or not product_id:
+                merged.append(item)
+                continue
+
+            key = (platform, product_id)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            merged.append(item)
+
+    return merged
+
+
+async def run_parallel_searches(keyword_vi: str, min_price: float = None, max_price: float = None) -> list[
+    CapturedData]:
     """Chạy đồng thời các nguồn search và gom kết quả"""
-    print(f"🔍 [Background] Đang tìm kiếm ngầm cho: {keyword_vi}")
+    print(f"🔍 [Background] Đang tìm kiếm ngầm cho: {keyword_vi} | Min: {min_price} | Max: {max_price}")
 
-    # Giả sử bạn bọc API Serper vào một hàm async get_serper_results
-    task_vertex = asyncio.create_task(perform_search(SearchRequest(keyword=keyword_vi)))
-    task_serper = asyncio.create_task(serper_search(keyword_vi))
+    # 1. Xây dựng chuỗi truy vấn chuẩn cho Vertex AI
+    vertex_filters = []
+    if min_price is not None:
+        vertex_filters.append(f"price_current >= {min_price}")
+    if max_price is not None:
+        vertex_filters.append(f"price_current <= {max_price}")
 
-    # Chờ cả 2 hoàn thành (có thể thêm timeout để tránh treo)
+    final_vertex_filter = " AND ".join(vertex_filters) if vertex_filters else None
+
+    # Gắn chuỗi filter vào SearchRequest
+    search_req = SearchRequest(
+        keyword=keyword_vi,
+        category_filter=final_vertex_filter  # Đẩy nguyên chuỗi vào đây
+    )
+
+    task_vertex = asyncio.create_task(perform_search(search_req))
+
+    # Truyền cả min và max vào Serper
+    task_serper = asyncio.create_task(serper_search(keyword_vi, min_price, max_price))
+
+    # Chờ cả 2 hoàn thành
     vertex_res = await task_vertex
     serper_res = await task_serper
 
-    # Gom và chuẩn hóa dữ liệu về cùng chuẩn CapturedData (dict)
-    combined_results = []
-    if vertex_res:
-        combined_results.extend(vertex_res)
+    combined_results = _dedupe_by_platform_product_id(vertex_res, serper_res)
 
-    if serper_res:
-        combined_results.extend(serper_res)
-
-    print(f"✅ [Background] Đã tìm xong. Tổng: {len(combined_results)} sản phẩm.")
+    print(f"✅ [Background] Đã tìm xong. Tổng sau dedupe: {len(combined_results)} sản phẩm.")
     return combined_results
 
 ### OUTPUT MẪU:

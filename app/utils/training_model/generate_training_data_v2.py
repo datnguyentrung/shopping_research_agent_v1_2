@@ -14,11 +14,11 @@ import pyarrow.parquet as pq
 # ─────────────────────────────────────────────
 METADATA_GLOB = r'D:\Thực tập MB\data\meta_Clothing_Shoes_and_Jewelry.jsonl.gz'
 CATEGORY_FILE = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\category.csv'
-OUTPUT_DIR    = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\parquet_chunks'
+OUTPUT_DIR    = r'D:\Thực tập MB\Shopping_Research_Agent_V1_2\data\parquet_chunks_v2'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BUFFER_SIZE       = 500_000
-MAX_CATEGORY_SCAN = 4   # Số lượng category item tối đa cần duyệt mỗi sản phẩm
+MAX_CATEGORY_SCAN = 5   # Số lượng category item tối đa cần duyệt mỗi sản phẩm
 
 # ─────────────────────────────────────────────
 # TEXT CLEANING
@@ -48,7 +48,7 @@ def load_categories(category_file: str):
             reader = csv.DictReader(f)
             for row in reader:
                 depth_val = int(row['Depth'])
-                if depth_val > 4:
+                if depth_val > 5:
                     continue
 
                 row['Depth'] = depth_val

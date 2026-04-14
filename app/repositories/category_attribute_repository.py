@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Set, Optional
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import aliased
 
 from sqlalchemy.orm import Session
@@ -46,6 +46,7 @@ class CategoryAttributeRepository(BaseRepository[CategoryAttribute]):
     def get_inherited_attributes_cte(self, category_ids: List[str]) -> List[type[Attribute]]:
         """
         Lấy toàn bộ model Attribute của một list categories và các category cha.
+        Đã tối ưu: Dùng Subquery để tính MAX(is_core) kết hợp với Index (category_id, is_core).
         """
         if not category_ids:
             return []
@@ -64,12 +65,24 @@ class CategoryAttributeRepository(BaseRepository[CategoryAttribute]):
             .where(parent_alias.id == base_q.c.parent_id)
         )
 
-        # 3. Query cuối: Join CTE với CategoryAttribute, sau đó JOIN tiếp với Attribute
+        # 3. TỐI ƯU MỚI: Gom nhóm và lấy Max(is_core) TỪ BẢNG CategoryAttribute TRƯỚC
+        # Database sẽ Scan index idx_category_core cực nhanh ở bước này (Vì chỉ xử lý ID và Boolean)
+        attr_subq = (
+            select(
+                CategoryAttribute.attribute_id,
+                func.max(CategoryAttribute.is_core).label("max_core")
+            )
+            .join(hierarchy_q, CategoryAttribute.category_id == hierarchy_q.c.id)
+            .group_by(CategoryAttribute.attribute_id)
+            .subquery()
+        )
+
+        # 4. Query cuối: Chỉ việc Join 1-1 bảng Attribute với subquery đã gom nhóm
+        # Lúc này attr_subq chỉ chứa các attribute_id DUY NHẤT -> Không cần tốn kém group_by ở bảng Attribute nữa!
         final_q = (
             select(Attribute)
-            .join(CategoryAttribute, Attribute.id == CategoryAttribute.attribute_id)
-            .join(hierarchy_q, CategoryAttribute.category_id == hierarchy_q.c.id)
-            .distinct() # Lọc trùng nếu nhiều category cùng chia sẻ 1 attribute
+            .join(attr_subq, Attribute.id == attr_subq.c.attribute_id)
+            .order_by(attr_subq.c.max_core.desc())
         )
 
         # Trả về list các object Attribute

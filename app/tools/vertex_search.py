@@ -26,21 +26,13 @@ async def perform_search(request: SearchRequest) -> List[CapturedData]:
 
         search_keyword = request.keyword
 
-        search_filter = ""
-        if request.category_filter:
-            try:
-                # Đảm bảo filter truyền vào là con số hợp lệ
-                max_price = float(request.category_filter)
-                search_filter = f'price_current <= {max_price}'
-            except ValueError:
-                # Nếu không phải số thì bỏ qua filter hoặc xử lý lỗi
-                search_filter = ""
+        search_filter = request.category_filter if request.category_filter else None
 
         search_req = discoveryengine.SearchRequest(
             serving_config=serving_config,
             query=search_keyword,
-            filter=search_filter if search_filter else None,
-            page_size=50,  # Thử tăng lên 1000
+            filter=search_filter,  # Truyền thẳng vào đây
+            page_size=50,
         )
 
         response = await client.search(search_req)

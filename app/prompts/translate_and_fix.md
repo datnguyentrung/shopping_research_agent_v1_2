@@ -42,6 +42,12 @@ I a m l o o k i n g f o r b a b y b o y s ' b l o o m e r s , d i a p e r c o v 
 Quần đùi, bọc tã và đồ lót bé trai | Baby boys' bloomers, diaper covers and underwear
 <|im_end|>
 <|im_start|>user
+tôi muốn tìm ào phông cho nam dẹp
+<|im_end|>
+<|im_start|>assistant
+Áo phông nam đẹp | Beautiful men's t-shirt
+<|im_end|>
+<|im_start|>user
 {input}
 <|im_end|>
 <|im_start|>assistant
