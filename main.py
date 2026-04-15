@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router as chat_router
 from app.tools.query_category_classifier import init_classifier_model
-from app.tools.transalte import init_qwen_model
 
 
 @asynccontextmanager
@@ -14,7 +13,6 @@ async def lifespan(app: FastAPI):
     print("🚀 Starting up Shopping Research Agent API...")
 
     init_classifier_model()
-    # init_qwen_model()
     print("✅ All models initialized successfully! API is ready to serve requests.")
 
     yield

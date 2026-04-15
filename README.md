@@ -5,11 +5,8 @@
 ```text
 Shopping_Research_Agent_V1_2/
 ├── app/
-│   ├── agents/                     # Định nghĩa các "bộ não" AI
-│   │   ├── __init__.py
-│   │   ├── base_agent.py           # Base class/cấu hình dùng chung cho agent
-│   │   ├── orchestrator.py         # Điều phối luồng làm việc giữa các agent
-│   │   └── researcher.py           # Agent chuyên thu thập/thẩm định thông tin sản phẩm
+│   ├── agents/                     # Legacy package placeholder (runtime khong con dung)
+│   │   └── __init__.py
 │   ├── api/                        # Tầng giao tiếp bên ngoài (FastAPI routes + deps)
 │   │   ├── dependencies.py         # Dependency injection/kiểm tra điều kiện đầu vào
 │   │   └── routes.py               # Các endpoint API
@@ -119,12 +116,14 @@ Frontend trong project co the dung truc tiep hook `useChatSSE` + `streamChat` nh
 
 ## Phan tach trach nhiem chat flow (de mo rong)
 
-- `app/core/adk_client.py`: Facade cho luong chat SSE; dieu phoi luong, khong chua logic agent chi tiet.
-- `app/core/orchestrator_runtime.py`: Adapter goi `flow_orchestrator_agent`, xu ly stream text tu ADK va fallback an toan.
+- `app/api/routes.py`: Endpoint `/chat/stream`, stream SSE ve FE.
+- `app/core/shopping_flow/stream.py`: Dieu phoi state machine theo phase.
+- `app/core/shopping_flow/handlers/*`: Xu ly logic theo tung phase.
+- `app/core/shopping_flow/final_summary.py`: Tong hop du lieu swipe va tao prompt bao cao.
+- `app/services/request_model_service.py`: Goi model + fallback, gom `generate_final_summary_stream`.
 - `app/core/chunk_builders.py`: Mapping domain event -> chunk schema (`message`, `a2ui`) de giu contract FE on dinh.
-- `app/agents/orchestrator.py`: Noi khai bao `flow_orchestrator_agent` va danh sach sub-agents.
 
-Khi mo rong them agent/tool, uu tien sua trong `app/agents/*` va `app/core/orchestrator_runtime.py`; han chế sửa `routes.py` va schema SSE de tranh vo contract FE.
+Khi mo rong them flow/tool, uu tien sua trong `app/core/shopping_flow/*` va `app/services/*`; han chế sửa `routes.py` va schema SSE de tranh vo contract FE.
 
 ## Shopping Flow State Machine (onboarding nhanh)
 

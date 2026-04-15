@@ -1,7 +1,7 @@
 import json
 import traceback
 
-from app.core.orchestrator_runtime import get_flow_runtime
+from app.services.request_model_service import generate_final_summary_stream
 from app.schemas.entities import MessageChunk
 
 
@@ -123,8 +123,7 @@ async def generate_final_summary_with_llm(
     """
 
     try:
-        runtime = get_flow_runtime()
-        async for text_chunk in runtime.stream_text(prompt):
+        async for text_chunk in generate_final_summary_stream(prompt):
             if text_chunk:
                 yield MessageChunk(content=text_chunk)
     except Exception as exc:

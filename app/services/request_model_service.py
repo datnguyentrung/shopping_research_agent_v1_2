@@ -3,7 +3,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from app.agents.base_agent import MODELS_TO_TRY
+from app.core.config.llm_models import MODELS_TO_TRY
 from app.core.config.config import settings
 from app.utils.load_instruction_from_file import load_instruction_from_file
 
@@ -53,6 +53,10 @@ async def generate_with_fallback_async(
 
         except Exception as e:
             error_msg = str(e)
+
+            # IN RA LỖI CHI TIẾT ĐỂ DEBUG
+            print(f"-> [Chi tiết lỗi của {model}]: {error_msg}")
+
             if any(err in error_msg for err in ["503", "UNAVAILABLE", "529", "429", "RESOURCE_EXHAUSTED"]):
                 print(f"[Warning] Model '{model}' loi (Qua tai/Het Quota). Dang chuyen sang model tiep theo...")
                 continue
@@ -95,9 +99,9 @@ async def fix_and_translate(word: str) -> dict:
 
     generate_content_config = types.GenerateContentConfig(
         system_instruction=system_instruction,
-        thinking_config=types.ThinkingConfig(
-            thinking_level=types.ThinkingLevel.LOW,
-        ),
+        # thinking_config=types.ThinkingConfig(
+        #     thinking_level=types.ThinkingLevel.LOW,
+        # ),
         temperature=0.1,
         response_mime_type="application/json",
         response_schema=genai.types.Schema(
@@ -142,9 +146,9 @@ async def generate_ranking_json(prompt: str) -> list:
         contents = _build_user_contents(prompt)
 
         generate_content_config = types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(
-                thinking_level=types.ThinkingLevel.LOW,
-            ),
+            # thinking_config=types.ThinkingConfig(
+            #     thinking_level=types.ThinkingLevel.LOW,
+            # ),
             temperature=0.2,
             response_mime_type="application/json",
             response_schema=genai.types.Schema(
@@ -184,9 +188,9 @@ async def analyze_dislike_reason(reason: str) -> list[str]:
 
     generate_content_config = types.GenerateContentConfig(
         system_instruction=system_instruction,
-        thinking_config=types.ThinkingConfig(
-            thinking_level=types.ThinkingLevel.LOW,
-        ),
+        # thinking_config=types.ThinkingConfig(
+        #     thinking_level=types.ThinkingLevel.LOW,
+        # ),
         temperature=0.1,
         response_mime_type="application/json",
         response_schema=genai.types.Schema(
@@ -208,6 +212,49 @@ async def analyze_dislike_reason(reason: str) -> list[str]:
     except Exception as e:
         print(f"Qua trinh phan tich ly do khong thich that bai: {e}")
         return []
+
+async def generate_final_summary_stream(prompt: str):
+    """
+    Async generator: stream Markdown report using genai.Client with model fallback.
+    Used by final_summary.py and adk_client.py (replaces ADK Runner).
+    """
+    system_instruction = load_instruction_from_file("prompts/interactive_agent.md")
+    contents = _build_user_contents(prompt)
+
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        # thinking_config=types.ThinkingConfig(
+        #     thinking_level=types.ThinkingLevel.HIGH,
+        # ),
+        temperature=0.6,
+    )
+
+    for model in MODELS_TO_TRY:
+        try:
+            stream = await client.aio.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=config,
+            )
+            async for chunk in stream:
+                if text := getattr(chunk, "text", None):
+                    yield text
+            return  # success — exit generator
+
+        except Exception as e:
+            error_msg = str(e)
+
+            # IN RA LỖI CHI TIẾT ĐỂ DEBUG
+            print(f"-> [Chi tiết lỗi của {model}]: {error_msg}")
+
+            if any(err in error_msg for err in ["503", "UNAVAILABLE", "529", "429", "RESOURCE_EXHAUSTED"]):
+                print(f"[Warning] Model '{model}' loi (Qua tai/Het Quota). Dang chuyen sang model tiep theo...")
+                continue
+            print(f"[Error] Loi nghiem trong tu '{model}': {error_msg}")
+            raise e
+
+    # All models failed
+    yield "\n\n*Hệ thống đang quá tải, không thể tạo báo cáo tóm tắt lúc này. Bạn vui lòng xem lại danh sách ở trên nhé!*"
 
 
 if __name__ == "__main__":

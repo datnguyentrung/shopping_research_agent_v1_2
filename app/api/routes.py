@@ -11,7 +11,6 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 # app/api/routes.py
-
 async def _event_generator(payload: ChatRequest) -> AsyncIterator[dict[str, str]]:
     try:
         async for chunk in stream_chat_chunks(payload):

@@ -2,11 +2,9 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from app.core.chunk_builders import build_hidden_event_chunks
-from app.core.orchestrator_runtime import get_flow_runtime
+from app.services.request_model_service import generate_final_summary_stream
 from app.schemas.entities import ChatStreamChunk, MessageChunk
 from app.schemas.requests import ChatRequest
-
-_flow_runtime = get_flow_runtime()
 
 
 async def stream_chat_chunks(payload: ChatRequest) -> AsyncIterator[ChatStreamChunk]:
@@ -21,6 +19,6 @@ async def stream_chat_chunks(payload: ChatRequest) -> AsyncIterator[ChatStreamCh
     if not message:
         return
 
-    async for text in _flow_runtime.stream_text(message):
+    async for text in generate_final_summary_stream(message):
         yield MessageChunk(content=text)
         await asyncio.sleep(0.02)
