@@ -5,6 +5,7 @@ from app.schemas.entities import CapturedData
 from app.schemas.requests import SearchRequest
 from app.tools.serper_search import serper_search
 from app.tools.vertex_search import perform_search
+from app.utils.trace_log import trace_plain, trace_print
 
 
 # Import các hàm bạn đã có: perform_search (Vertex), classify_keyword_topk, serper_search...
@@ -43,10 +44,24 @@ def _dedupe_by_platform_product_id(*sources):
     return merged
 
 
-async def run_parallel_searches(keyword_vi: str, min_price: float = None, max_price: float = None) -> list[
-    CapturedData]:
+async def run_parallel_searches(
+    keyword_vi: str,
+    min_price: float = None,
+    max_price: float = None,
+    trace_id: str | None = None,
+) -> list[CapturedData]:
     """Chạy đồng thời các nguồn search và gom kết quả"""
-    print(f"🔍 [Background] Đang tìm kiếm ngầm cho: {keyword_vi} | Min: {min_price} | Max: {max_price}")
+    trace_key = trace_id or "no-trace"
+    trace_print(
+        trace_key,
+        "run_parallel_searches",
+        "enter",
+        keyword=keyword_vi,
+        minPrice=min_price,
+        maxPrice=max_price,
+    )
+
+    trace_plain(f"🔍 [Background] Đang tìm kiếm ngầm cho: {keyword_vi} | Min: {min_price} | Max: {max_price}")
 
     # 1. Xây dựng chuỗi truy vấn chuẩn cho Vertex AI
     vertex_filters = []
@@ -72,10 +87,25 @@ async def run_parallel_searches(keyword_vi: str, min_price: float = None, max_pr
     vertex_res = await task_vertex
     serper_res = await task_serper
 
+    trace_print(
+        trace_key,
+        "run_parallel_searches",
+        "sources_completed",
+        vertexCount=len(vertex_res) if vertex_res else 0,
+        serperCount=len(serper_res) if serper_res else 0,
+    )
+
     combined_results = _dedupe_by_platform_product_id(vertex_res, serper_res)
 
-    print(f"✅ [Background] Đã tìm xong. Tổng sau dedupe: {len(combined_results)} sản phẩm.")
+    trace_plain(f"✅ [Background] Đã tìm xong. Tổng sau dedupe: {len(combined_results)} sản phẩm.")
+    trace_print(
+        trace_key,
+        "run_parallel_searches",
+        "exit",
+        dedupedCount=len(combined_results),
+    )
     return combined_results
+
 
 ### OUTPUT MẪU:
 # 🔍 [Background] Đang tìm kiếm ngầm cho: Áo thun nam đẹp
@@ -91,7 +121,7 @@ if __name__ == "__main__":
     # Test chạy song song
     test_keyword = "Áo thun nam đẹp"
     results = asyncio.run(run_parallel_searches(test_keyword))
-    print(f"Tổng sản phẩm thu được: {len(results)}")
+    trace_plain(f"Tổng sản phẩm thu được: {len(results)}")
     # In ra một vài sản phẩm đầu tiên để kiểm tra
     for i, product in enumerate(results[:5]):
-        print(f"Product {i+1}: {product}")
+        trace_plain(f"Product {i+1}: {product}")

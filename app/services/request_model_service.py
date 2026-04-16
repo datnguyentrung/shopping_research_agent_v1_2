@@ -1,4 +1,6 @@
 import json
+import re
+from collections.abc import AsyncIterator
 from typing import Any
 from google import genai
 from google.genai import types
@@ -256,6 +258,51 @@ async def generate_final_summary_stream(prompt: str):
     # All models failed
     yield "\n\n*Hệ thống đang quá tải, không thể tạo báo cáo tóm tắt lúc này. Bạn vui lòng xem lại danh sách ở trên nhé!*"
 
+async def stream_ranking_ids(prompt: str) -> AsyncIterator[str]:
+    """
+    Đọc stream từ LLM và trích xuất product_id ngay khi nó xuất hiện.
+    """
+    contents = _build_user_contents(prompt)
+
+    generate_content_config = types.GenerateContentConfig(
+        temperature=0.2,
+        response_mime_type="application/json",
+        response_schema=genai.types.Schema(
+            type=genai.types.Type.ARRAY,
+            items=genai.types.Schema(
+                type=genai.types.Type.OBJECT,
+                properties={
+                    "product_id": genai.types.Schema(type=genai.types.Type.STRING),
+                    "score": genai.types.Schema(type=genai.types.Type.INTEGER),
+                },
+                required=["product_id", "score"]
+            )
+        ),
+    )
+
+    for model in MODELS_TO_TRY:
+        try:
+            stream = await client.aio.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=generate_content_config,
+            )
+            buffer = ""
+            seen_ids = set()
+
+            async for chunk in stream:
+                if text := getattr(chunk, "text", None):
+                    buffer += text
+                    # Regex quét qua buffer tìm cấu trúc "product_id": "id_sản_phẩm"
+                    matches = re.findall(r'"product_id"\s*:\s*"([^"]+)"', buffer)
+                    for pid in matches:
+                        if pid not in seen_ids:
+                            seen_ids.add(pid)
+                            yield pid  # Bắn ngay ID này về luồng xử lý
+            return  # Thành công thì thoát fallback
+        except Exception as e:
+            print(f"[Warning] Lỗi model '{model}' khi stream ranking: {e}")
+            continue
 
 if __name__ == "__main__":
     import asyncio

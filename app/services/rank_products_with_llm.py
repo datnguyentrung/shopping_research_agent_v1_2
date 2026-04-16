@@ -1,36 +1,43 @@
 import json
+from collections.abc import AsyncIterator
 
-from app.services.request_model_service import generate_ranking_json
+from app.services.request_model_service import stream_ranking_ids
+from app.utils.trace_log import product_summary, trace_print
 
 
-async def rank_products_with_llm(filtered_products: list, user_message: str, answers: list) -> list:
-    """
-    Hàm xử lý business logic: Đóng gói thông tin, gọi LLM, và map dữ liệu trả về.
-    """
+async def rank_products_with_llm_stream(
+        filtered_products: list,
+        user_message: str,
+        answers: list,
+        trace_id: str | None = None) -> AsyncIterator[dict]:
+    trace_key = trace_id or "no-trace"
+    trace_print(
+        trace_key,
+        "rank_products_with_llm_stream",
+        "enter",
+        filteredProducts=len(filtered_products),
+        answersCount=len(answers),
+        userMessagePreview=user_message[:160],
+    )
+
     if not filtered_products:
-        return []
+        trace_print(trace_key, "rank_products_with_llm_stream", "no_filtered_products")
+        return
 
-    # 1. Chuẩn bị text sở thích từ danh sách answers của người dùng
     preferences_text = "Không có tiêu chí đặc biệt."
     if answers:
-        prefs = []
-        for ans in answers:
-            options = ans.get("selected_options", [])
-            if options:
-                # Ép kiểu sang string và nối lại
-                prefs.append(", ".join([str(opt) for opt in options]))
+        prefs = [", ".join([str(opt) for opt in ans.get("selected_options", [])]) for ans in answers if
+                 ans.get("selected_options")]
         if prefs:
             preferences_text = "Người dùng ưu tiên các tiêu chí sau: " + " | ".join(prefs)
 
-    # 2. Tạo payload siêu nhẹ gửi lên LLM (Tiết kiệm token & tăng tốc độ)
     mini_products = []
+    product_map = {}
     for prod in filtered_products:
-        # Xử lý tương thích cả Pydantic Model lẫn Dictionary
         p_dict = prod.model_dump(by_alias=False) if hasattr(prod, "model_dump") else prod
-
-        # Lấy ID (cover các trường hợp key khác nhau)
         pid = str(p_dict.get("product_id") or p_dict.get("productId") or p_dict.get("id"))
 
+        product_map[pid] = prod
         mini_products.append({
             "product_id": pid,
             "name": p_dict.get("name", ""),
@@ -39,48 +46,60 @@ async def rank_products_with_llm(filtered_products: list, user_message: str, ans
             "sold": p_dict.get("sold_count", 0)
         })
 
-    # 3. Khởi tạo Prompt
-    prompt = f"""
-        Hãy xếp hạng danh sách sản phẩm E-commerce dưới đây.
+    trace_print(
+        trace_key,
+        "rank_products_with_llm_stream",
+        "prompt_prepared",
+        candidateCount=len(mini_products),
+    )
 
-        [YÊU CẦU BAN ĐẦU CỦA KHÁCH]: "{user_message}"
-        [CÁC TIÊU CHÍ KHÁCH ĐÃ CHỌN THÊM]: {preferences_text}
+    prompt = f"""Hãy xếp hạng danh sách sản phẩm E-commerce dưới đây.
+    [YÊU CẦU BAN ĐẦU CỦA KHÁCH]: "{user_message}"
+    [CÁC TIÊU CHÍ KHÁCH ĐÃ CHỌN THÊM]: {preferences_text}
+    [DANH SÁCH SẢN PHẨM ỨNG VIÊN]: {json.dumps(mini_products, ensure_ascii=False)}
+    Nhiệm vụ: Chấm điểm (score từ 0-100)..."""
 
-        [DANH SÁCH SẢN PHẨM ỨNG VIÊN]:
-        {json.dumps(mini_products, ensure_ascii=False)}
+    yielded_ids = set()
+    stream_idx = 0
 
-        Nhiệm vụ: Chấm điểm (score từ 0-100) dựa trên độ phù hợp với tổng hợp yêu cầu và sở thích của khách. Trả về danh sách được xếp hạng từ điểm cao nhất xuống thấp nhất.
-    """
+    async for pid in stream_ranking_ids(prompt):
+        stream_idx += 1
+        trace_print(
+            trace_key,
+            "rank_products_with_llm_stream",
+            "ranking_id_streamed",
+            index=stream_idx,
+            productId=pid,
+            seenCount=len(yielded_ids),
+        )
+        if pid in product_map and pid not in yielded_ids:
+            yielded_ids.add(pid)
+            product = product_map[pid]
+            trace_print(
+                trace_key,
+                "rank_products_with_llm_stream",
+                "emit_ranked_product",
+                product=product_summary(product),
+            )
+            yield product
 
-    # 4. Gọi LLM
-    ranked_result = await generate_ranking_json(prompt)
+    fallback_count = 0
+    for pid, p in product_map.items():
+        if pid not in yielded_ids:
+            fallback_count += 1
+            trace_print(
+                trace_key,
+                "rank_products_with_llm_stream",
+                "emit_fallback_product",
+                product=product_summary(p),
+            )
+            yield p
 
-    # 5. Nếu LLM lỗi hoặc trả mảng rỗng, fallback về danh sách gốc
-    if not ranked_result:
-        return filtered_products
-
-    # 6. Map kết quả JSON (chứa ID) về lại Object gốc để giữ nguyên thông tin hiển thị UI
-    product_map = {}
-    for p in filtered_products:
-        p_dict = p.model_dump(by_alias=False) if hasattr(p, "model_dump") else p
-        pid = str(p_dict.get("product_id") or p_dict.get("productId") or p_dict.get("id"))
-        product_map[pid] = p
-
-    final_sorted_products = []
-    ranked_ids = set()
-
-    # Đưa các sản phẩm được LLM chấm điểm vào trước (đã sort)
-    for item in ranked_result:
-        pid = str(item.get("product_id"))
-        if pid in product_map:
-            final_sorted_products.append(product_map[pid])
-            ranked_ids.add(pid)
-
-    # Fallback an toàn: Thêm những sản phẩm LLM lỡ bỏ sót xuống cuối mảng
-    for p in filtered_products:
-        p_dict = p.model_dump(by_alias=False) if hasattr(p, "model_dump") else p
-        pid = str(p_dict.get("product_id") or p_dict.get("productId") or p_dict.get("id"))
-        if pid not in ranked_ids:
-            final_sorted_products.append(p)
-
-    return final_sorted_products
+    trace_print(
+        trace_key,
+        "rank_products_with_llm_stream",
+        "completed",
+        rankedYielded=len(yielded_ids),
+        fallbackYielded=fallback_count,
+        totalYielded=len(yielded_ids) + fallback_count,
+    )

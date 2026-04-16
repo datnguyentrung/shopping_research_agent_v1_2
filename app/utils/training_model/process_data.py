@@ -222,9 +222,9 @@ def process_data(input_path: str, output_path: str):
     print(f"  File lưu tại          : {output_path}")
     print(f"{'='*55}")
 
-    print(f"\n📊 Phân phối nhãn (top 10 nhiều nhất):")
-    top10 = cat_counts_after.sort_values(ascending=False).head(10)
-    for cid, cnt in top10.items():
+    print(f"\n📊 Phân phối nhãn (top 5 nhiều nhất):")
+    top5 = cat_counts_after.sort_values(ascending=False).head(5)
+    for cid, cnt in top5.items():
         cat_name = df_final[df_final['category_id'] == cid]['category_name'].iloc[0]
         bar = '█' * (cnt // (MAX_SAMPLES_PER_CATEGORY // 20))
         print(f"   {cnt:>6,}  {bar:<20}  {cat_name[:40]}")
